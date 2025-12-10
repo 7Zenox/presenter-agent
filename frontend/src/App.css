@@ -1,0 +1,48 @@
+.app {
+  min-height: 100vh;
+  background-color: #f9fafb;
+}
+
+.app-header {
+  background-color: #ffffff;
+  padding: 1.5rem 2rem;
+  border-bottom: 1px solid #e5e7eb;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.app-header h1 {
+  font-size: 1.875rem;
+  font-weight: 700;
+  color: #1f2937;
+  margin: 0;
+}
+
+.error-banner {
+  margin-top: 1rem;
+  padding: 0.75rem;
+  background-color: #fee2e2;
+  color: #991b1b;
+  border-radius: 6px;
+  font-size: 0.875rem;
+}
+
+.app-main {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 2rem;
+  }
+
+.presentation-status {
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  background-color: #dbeafe;
+  border: 1px solid #93c5fd;
+  border-radius: 6px;
+}
+
+.status-message {
+  margin: 0;
+  color: #1e40af;
+  font-size: 0.875rem;
+  text-align: center;
+}
