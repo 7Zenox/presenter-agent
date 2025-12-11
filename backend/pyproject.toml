@@ -1,0 +1,26 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "Voice Presentation Agent Backend"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi[standard]>=0.124.0",
+    "openai>=1.0.0",
+    "openai-agents[voice]>=0.1.0",
+    "pydantic>=2.12.5",
+    "python-dotenv>=1.2.1",
+    "websockets>=15.0.1",
+    "python-pptx>=0.6.23",
+    "pydub>=0.25.1",
+    "httpx>=0.25.0",
+    "sounddevice>=0.4.6",
+    "numpy>=1.24.0",
+]
+
+[tool.uv]
+dev-dependencies = []
+
+[project.scripts]
+dev = "fastapi dev app/main.py --host 0.0.0.0 --port 8000"
+conversation = "python -m app.conversation_server"
