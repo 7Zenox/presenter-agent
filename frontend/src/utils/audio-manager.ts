@@ -10,6 +10,7 @@ export class AudioManager {
   private maxReconnectAttempts: number = 5;
   private reconnectTimeout: number | null = null;
   private shouldReconnect: boolean = true;
+  private activeAudioSources: AudioBufferSourceNode[] = []; // Track active audio sources for interruption
   
   constructor(private onTranscript: (text: string, role: string) => void) {
     console.log('[AudioManager] Initialized');
@@ -70,8 +71,9 @@ export class AudioManager {
               break;
             
             case 'speech_started':
-              console.log('[AudioManager] User started speaking');
-              // Could emit event for UI to show "listening" indicator
+              console.log('[AudioManager] User started speaking - interrupting assistant if speaking');
+              // Clear audio queue when user starts speaking (interruption)
+              this.clearAudioQueue();
               break;
             
             case 'speech_stopped':
@@ -97,6 +99,11 @@ export class AudioManager {
             
             case 'output_audio_buffer.speech_stopped':
               console.log('[AudioManager] Assistant stopped speaking');
+              break;
+            
+            case 'output_audio_buffer.interrupted':
+              console.log('[AudioManager] Output audio buffer interrupted');
+              this.clearAudioQueue();
               break;
             
             case 'input_audio_buffer.committed':
@@ -385,6 +392,17 @@ export class AudioManager {
         source.buffer = audioBuffer;
         source.connect(this.audioContext.destination);
 
+        // Track this source so we can stop it if interrupted
+        this.activeAudioSources.push(source);
+        
+        // Clean up source when it finishes playing
+        source.onended = () => {
+          const index = this.activeAudioSources.indexOf(source);
+          if (index > -1) {
+            this.activeAudioSources.splice(index, 1);
+          }
+        };
+
         const currentTime = this.audioContext.currentTime;
         if (this.nextStartTime < currentTime) {
           this.nextStartTime = currentTime;
@@ -398,6 +416,27 @@ export class AudioManager {
   }
 
   private clearAudioQueue() {
+    const count = this.activeAudioSources.length;
+    if (count > 0) {
+      console.log(`[AudioManager] Clearing audio queue - stopping ${count} active sources`);
+    }
+    
+    // Stop all currently playing audio sources
+    const sourcesToStop = [...this.activeAudioSources]; // Copy array to avoid modification during iteration
+    sourcesToStop.forEach((source) => {
+      try {
+        source.stop(); // Stop the source immediately (throws if already stopped/finished)
+        source.disconnect(); // Disconnect from audio context
+      } catch (e) {
+        // Source may have already finished, been stopped, or not started yet
+        // This is expected and fine - just continue
+      }
+    });
+    
+    // Clear the array
+    this.activeAudioSources = [];
+    
+    // Reset timing for next audio
     if (this.audioContext) {
         this.nextStartTime = this.audioContext.currentTime;
     }

@@ -73,6 +73,7 @@ async def send_session_config(vendor_ws):
                 "threshold": 0.5,
                 "prefix_padding_ms": 300,
                 "silence_duration_ms": 200,
+                "interrupt_response": True,  # Allow user to interrupt assistant's responses
             },
         }
     }
@@ -372,11 +373,11 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                 
                 elif event_type == "response.interrupted":
                     await client_ws.send_json({"type": "interrupted"})
-                    logger.info("Response interrupted")
+                    logger.info("🛑 Response interrupted by user")
                 
                 elif event_type == "input_audio_buffer.speech_started":
                     await client_ws.send_json({"type": "speech_started"})
-                    logger.info("User started speaking")
+                    logger.info("User started speaking - this will interrupt assistant if speaking")
                 
                 elif event_type == "input_audio_buffer.speech_stopped":
                     await client_ws.send_json({"type": "speech_stopped"})
@@ -397,6 +398,10 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                 elif event_type == "output_audio_buffer.speech_stopped":
                     logger.info("🎵 Assistant stopped speaking (audio output)")
                     await client_ws.send_json({"type": "output_audio_buffer.speech_stopped"})
+                
+                elif event_type == "output_audio_buffer.interrupted":
+                    logger.info("🛑 Output audio buffer interrupted - user spoke during assistant response")
+                    await client_ws.send_json({"type": "interrupted"})
                 
                 elif event_type == "error":
                     await client_ws.send_json({
