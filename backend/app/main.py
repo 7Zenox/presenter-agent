@@ -593,7 +593,7 @@ Start with slide {current_slide} - call get_slide(slide_number={current_slide}),
             "instructions": instructions,
             "input_audio_format": "pcm16",
             "output_audio_format": "pcm16",
-            "temperature": 0,  # Deterministic - follow instructions strictly
+            "temperature": 0.6,  # Deterministic - follow instructions strictly
             "input_audio_transcription": {
                 "model": "whisper-1"
             },
@@ -1064,15 +1064,17 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                         "role": "assistant"
                     })
                 
+                elif event_type == "response.function_call_arguments.delta":
+                    # Function call arguments are being streamed - no action needed, just wait for .done
+                    # This reduces log noise
+                    pass
+                
                 elif event_type == "response.function_call_arguments.done":
                     # Function call arguments are complete - this is when we should execute the function call
-                    # The item contains the function_call with complete arguments
-                    item = data.get("item", {})
-                    function_call = item.get("function_call", item)  # Try nested first, fallback to item itself
-                    
-                    function_name = function_call.get("name", "")
-                    call_id = function_call.get("call_id", "")
-                    arguments_str = function_call.get("arguments", "{}")
+                    # The data has name, call_id, and arguments at the top level
+                    function_name = data.get("name", "")
+                    call_id = data.get("call_id", "")
+                    arguments_str = data.get("arguments", "{}")
                     
                     if function_name and call_id:
                         # Check if we've already handled this call_id
@@ -1093,7 +1095,7 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                             })
                     else:
                         logger.warning(f"⚠️ response.function_call_arguments.done missing function_name or call_id")
-                        logger.warning(f"   Item structure: {json.dumps(item, indent=2)[:500]}")
+                        logger.warning(f"   Data structure: {json.dumps(data, indent=2)[:500]}")
                 
                 elif event_type == "conversation.item.input_audio_transcription.completed":
                     # User transcription
@@ -1134,17 +1136,26 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                                 logger.info(f"   🔍 Question detected: '{transcript}'")
                                 logger.info(f"   ℹ️ Expecting: search_slides() → show_slide() → answer (per ReAct pattern)")
                     elif item_type == "function_call":
-                        # Handle function calls created in conversation
-                        # Note: This might be redundant if response.function_call_arguments.done already handled it
+                        # Function call created in conversation
+                        # IMPORTANT: Don't handle it here if arguments are empty - wait for response.function_call_arguments.done
                         function_name = item.get('name', 'unknown')
                         call_id = item.get('call_id', '')
+                        arguments_str = item.get('arguments', '')
                         
-                        if call_id and call_id in handled_call_ids:
+                        # Only track it, don't execute if arguments are empty
+                        if not arguments_str or arguments_str == "":
+                            logger.info(f"🔧 Function call detected in conversation.item.created: {function_name} (waiting for arguments)")
+                            logger.info(f"   📋 Call ID: {call_id}, Arguments: (empty - will wait for response.function_call_arguments.done)")
+                            # Track that this response has a function call
+                            current_response_has_function_call = True
+                            # Don't execute yet - wait for response.function_call_arguments.done
+                        elif call_id and call_id in handled_call_ids:
                             logger.info(f"⏭️ Skipping already-handled function call in conversation.item.created: {function_name} (call_id: {call_id})")
                         else:
+                            # Arguments are already present (shouldn't happen often, but handle it)
                             if call_id:
                                 handled_call_ids.add(call_id)
-                            logger.info(f"🔧 Function call detected in conversation.item.created: {function_name}")
+                            logger.info(f"🔧 Function call detected in conversation.item.created with arguments: {function_name}")
                             logger.info(f"   📋 Function call details: {json.dumps(item, indent=2)[:500]}...")
                             # Track that this response has a function call
                             current_response_has_function_call = True
