@@ -2,6 +2,7 @@ import asyncio
 import os
 import json
 import logging
+import time
 import websockets
 import traceback
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException
@@ -36,22 +37,53 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Tool definitions for PowerPoint presentation
+# Designed following ReAct (Reasoning and Acting) pattern principles
 TOOL_DEFINITIONS = [
     {
         "type": "function",
+        "name": "search_slides",
+        "description": "Search through ALL slides to find information relevant to a query. This is your primary information retrieval tool. Extract key terms from the user's question and search for matching slides. Returns up to 3 most relevant slides with their full content. Use this whenever you need to find information from the presentation.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query extracted from user's question. Use 2-5 key terms. Examples: 'investors', 'product features', 'pricing model', 'team members', 'company background'"
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "type": "function",
+        "name": "show_slide",
+        "description": "Display a specific slide to the user. Use this to navigate to a slide before referencing its content. The frontend will automatically scroll to the displayed slide. Always call this when you reference information from a specific slide.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "slide_number": {
+                    "type": "integer",
+                    "description": "Slide number (1-based). Slide 1 = 1, Slide 2 = 2, etc. Must match a slide_number from search_slides results."
+                }
+            },
+            "required": ["slide_number"]
+        }
+    },
+    {
+        "type": "function",
         "name": "navigate_slide",
-        "description": "Navigate to a different slide in the presentation. Use 'next' to go forward, 'prev' to go backward, or 'jump' to go to a specific slide index (0-based). Prefer using show_slide() for displaying slides to users as it uses 1-based slide numbers.",
+        "description": "Navigate to next/previous slide or jump to specific index",
         "parameters": {
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
                     "enum": ["next", "prev", "jump"],
-                    "description": "Navigation action: 'next' for next slide, 'prev' for previous slide, 'jump' to go to specific slide"
+                    "description": "Navigation action"
                 },
                 "slide_index": {
                     "type": "integer",
-                    "description": "Slide index (0-based) - required when action is 'jump', ignored otherwise"
+                    "description": "Slide index (0-based) - required for 'jump'"
                 }
             },
             "required": ["action"]
@@ -60,13 +92,13 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "name": "get_slide_content",
-        "description": "Get the content of a specific slide by its index. You already have all slide content in the instructions JSON, but you can use this tool if needed. Slide numbers start at 1, but use 0-based index (slide 3 = index 2, slide 5 = index 4).",
+        "description": "Get content of a specific slide by index (0-based)",
         "parameters": {
             "type": "object",
             "properties": {
                 "slide_index": {
                     "type": "integer",
-                    "description": "Slide index (0-based). Convert slide number to index: slide 1 = 0, slide 2 = 1, slide 3 = 2, etc."
+                    "description": "Slide index (0-based)"
                 }
             },
             "required": ["slide_index"]
@@ -75,7 +107,7 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "name": "get_current_slide",
-        "description": "Get information about the currently displayed slide.",
+        "description": "Get the current slide information",
         "parameters": {
             "type": "object",
             "properties": {}
@@ -83,19 +115,19 @@ TOOL_DEFINITIONS = [
     },
     {
         "type": "function",
-        "name": "show_slide",
-        "description": "🚨 MANDATORY: Display a specific slide to the user. You MUST call this tool automatically whenever you reference content from a specific slide to answer a question. The frontend will automatically scroll to that slide. Use slide_number (1-based: slide 1, slide 2, etc.). Examples: When answering 'What are the key features?' using slide 3's content, call show_slide(slide_number=3). When answering 'Tell me about pricing' using slide 5's content, call show_slide(slide_number=5). This ensures the user sees the slide you're referencing while you answer.",
+        "name": "get_slide",
+        "description": "Get the FULL content of a specific slide by slide number. Use this when you need detailed information from a slide. The summaries in your instructions only show previews - call this tool to get complete slide content including all text, bullet points, and notes.",
         "parameters": {
             "type": "object",
             "properties": {
                 "slide_number": {
                     "type": "integer",
-                    "description": "Slide number (1-based). Slide 1 = 1, Slide 2 = 2, etc. This is the human-readable slide number."
+                    "description": "Slide number (1-based). Slide 1 = 1, Slide 2 = 2, etc."
                 }
             },
             "required": ["slide_number"]
         }
-    }
+    },
 ]
 
 # Headers for OpenAI connection (as dict, matching reference implementation)
@@ -125,7 +157,10 @@ async def handle_tool_call(vendor_ws, client_ws, item: dict):
     call_id = item.get("call_id", "")  # Use call_id, not id
     arguments_str = item.get("arguments", "{}")
     
-    logger.info(f"🔧 Tool call: {function_name}({arguments_str})")
+    logger.info(f"🔧🔧🔧 HANDLING TOOL CALL 🔧🔧🔧")
+    logger.info(f"   Function: {function_name}")
+    logger.info(f"   Call ID: {call_id}")
+    logger.info(f"   Arguments: {arguments_str}")
     
     # Parse arguments
     try:
@@ -140,15 +175,37 @@ async def handle_tool_call(vendor_ws, client_ws, item: dict):
         if function_name == "navigate_slide":
             action = arguments.get("action")
             slide_index = arguments.get("slide_index")
-            result = presentation_manager.navigate_to_slide(action, slide_index)
+            nav_result = presentation_manager.navigate_to_slide(action, slide_index)
             
-            # Notify client of slide change
-            await client_ws.send_json({
-                "type": "slide_changed",
-                "slide_index": result.get("current_slide", 0),
-                "total_slides": result.get("total_slides", 0),
-                "slide": result.get("slide", {}),
-            })
+            if "error" not in nav_result:
+                # Get full slide content to include in result
+                slide_data = nav_result.get("slide", {})
+                current_idx = nav_result.get("current_slide", 0)
+                
+                # Build result with explicit content for AI to use
+                result = {
+                    "success": True,
+                    "slide_number": current_idx + 1,  # 1-based for AI
+                    "title": slide_data.get("title", ""),
+                    "content": slide_data.get("content", ""),
+                    "notes": slide_data.get("notes", ""),
+                    "total_slides": nav_result.get("total_slides", 0),
+                    "message": f"Now on slide {current_idx + 1}. READ THE CONTENT ABOVE OUT LOUD."
+                }
+                
+                logger.info(f"   📍 Navigated to slide {current_idx + 1}")
+                logger.info(f"   📄 Title: {result['title']}")
+                logger.info(f"   📄 Content length: {len(result['content'])} chars")
+                
+                # Notify client of slide change
+                await client_ws.send_json({
+                    "type": "slide_changed",
+                    "slide_index": current_idx,
+                    "total_slides": nav_result.get("total_slides", 0),
+                    "slide": slide_data,
+                })
+            else:
+                result = nav_result
         
         elif function_name == "get_slide_content":
             slide_index = arguments.get("slide_index")
@@ -162,6 +219,85 @@ async def handle_tool_call(vendor_ws, client_ws, item: dict):
         
         elif function_name == "get_current_slide":
             result = presentation_manager.get_current_slide()
+        
+        elif function_name == "get_slide":
+            slide_number = arguments.get("slide_number")
+            logger.info(f"   📄 get_slide called with slide_number={slide_number}")
+            if slide_number is None:
+                result = {"error": "slide_number is required"}
+                logger.error("   ❌ get_slide called without slide_number!")
+            else:
+                # Convert 1-based slide number to 0-based index
+                slide_index = slide_number - 1
+                if slide_index < 0 or slide_index >= len(presentation_manager.slides):
+                    result = {"error": f"Invalid slide number {slide_number}. Valid range: 1-{len(presentation_manager.slides)}"}
+                    logger.error(f"   ❌ Invalid slide_number {slide_number}")
+                else:
+                    slide_data = presentation_manager.get_slide_content(slide_index)
+                    if "error" not in slide_data:
+                        # Add slide_number for consistency
+                        slide_data["slide_number"] = slide_number
+                        result = slide_data
+                        logger.info(f"   ✅ Retrieved full content for slide {slide_number}: '{slide_data.get('title', 'N/A')}'")
+                        logger.info(f"   📝 Content length: {len(slide_data.get('content', ''))} chars")
+                    else:
+                        result = slide_data
+        
+        elif function_name == "search_slides":
+            query = arguments.get("query", "").lower().strip()
+            logger.info(f"   🔍 search_slides called with query: '{query}'")
+            
+            if not query:
+                result = {"error": "query is required"}
+                logger.warning("   ⚠️ search_slides called without query")
+            else:
+                # Extract keywords from query
+                import re
+                keywords = [word for word in re.findall(r'\b\w+\b', query.lower()) 
+                           if word not in ['the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 
+                                          'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'should',
+                                          'can', 'could', 'may', 'might', 'must', 'shall', 'what', 'who', 'where',
+                                          'when', 'why', 'how', 'which', 'about', 'tell', 'me', 'show']]
+                
+                if not keywords:
+                    keywords = query.split()
+                
+                logger.info(f"   🔑 Search keywords: {keywords}")
+                
+                # Search slides
+                matching_slides = []
+                for slide in presentation_manager.slides:
+                    slide_num = slide['index'] + 1
+                    title = slide.get('title', '').lower()
+                    content = slide.get('content', '').lower()
+                    
+                    # Count matches
+                    title_matches = sum(1 for kw in keywords if kw in title)
+                    content_matches = sum(1 for kw in keywords if kw in content)
+                    score = title_matches * 3 + content_matches
+                    
+                    if score > 0:
+                        matching_slides.append({
+                            "slide_number": slide_num,
+                            "title": slide.get('title', ''),
+                            "content": slide.get('content', ''),
+                            "score": score
+                        })
+                
+                # Sort by score
+                matching_slides.sort(key=lambda x: x['score'], reverse=True)
+                
+                result = {
+                    "query": query,
+                    "total_matches": len(matching_slides),
+                    "slides": matching_slides[:3]  # Return top 3 matches
+                }
+                
+                if matching_slides:
+                    top = matching_slides[0]
+                    logger.info(f"   ✅ Found {len(matching_slides)} matches. Top: slide {top['slide_number']} - '{top['title']}' (score: {top['score']})")
+                else:
+                    logger.warning(f"   ⚠️ No matches found for: {keywords}")
         
         elif function_name == "show_slide":
             slide_number = arguments.get("slide_number")
@@ -218,6 +354,7 @@ async def handle_tool_call(vendor_ws, client_ws, item: dict):
         result = {"error": str(e)}
     
     # Send tool result back to OpenAI
+    logger.info(f"📤 Sending tool result back to OpenAI for {function_name} (call_id: {call_id})")
     tool_result_message = {
         "type": "conversation.item.create",
         "item": {
@@ -228,8 +365,24 @@ async def handle_tool_call(vendor_ws, client_ws, item: dict):
     }
     
     await vendor_ws.send(json.dumps(tool_result_message))
-    # Log full result for get_slide_content to verify content is being sent
-    if function_name == "get_slide_content":
+    logger.info(f"✅ Tool result sent successfully for {function_name}")
+    # Log full result for specific tools to verify content is being sent
+    if function_name == "search_slides":
+        logger.info(f"✅ search_slides result sent:")
+        if isinstance(result, dict) and "slides" in result:
+            logger.info(f"   Total matches: {result.get('total_matches', 0)}")
+            for idx, slide in enumerate(result.get('slides', [])[:2]):
+                logger.info(f"   Match {idx+1}: slide {slide.get('slide_number')} - '{slide.get('title')}' (score: {slide.get('score')})")
+                logger.info(f"      Content preview: {slide.get('content', '')[:200]}...")
+    elif function_name == "get_slide":
+        logger.info(f"✅ get_slide result sent:")
+        if isinstance(result, dict) and "error" not in result:
+            logger.info(f"   Slide {result.get('slide_number', 'N/A')}: '{result.get('title', 'N/A')}'")
+            logger.info(f"   Full content length: {len(result.get('content', ''))} chars")
+            logger.info(f"   Content preview: {result.get('content', '')[:300]}...")
+        else:
+            logger.warning(f"   ⚠️ Error retrieving slide: {result.get('error', 'Unknown error')}")
+    elif function_name == "get_slide_content":
         logger.info(f"✅ Tool result sent for {function_name}:")
         logger.info(f"   Title: '{result.get('title', 'N/A') if isinstance(result, dict) else 'N/A'}'")
         logger.info(f"   Content length: {len(str(result.get('content', ''))) if isinstance(result, dict) else 0} chars")
@@ -242,6 +395,88 @@ async def handle_tool_call(vendor_ws, client_ws, item: dict):
         "type": "response.create",
     }
     await vendor_ws.send(json.dumps(continue_message))
+
+
+async def add_presentation_to_conversation(vendor_ws):
+    """Add presentation data as conversation items per OpenAI Realtime API best practices.
+    
+    Per OpenAI docs (https://platform.openai.com/docs/guides/realtime-conversations):
+    - Use conversation items for data context, not instructions
+    - For small datasets: Add full content to conversation
+    - For large datasets: Add index/summary, use tools for on-demand retrieval
+    - Use role: "user" for data context (not "system" which is for instructions)
+    """
+    if not presentation_manager.slides:
+        logger.warning("   ⚠️ No slides to add to conversation")
+        return
+    
+    total_slides = len(presentation_manager.slides)
+    
+    # Per OpenAI docs: For small presentations, add full content to conversation
+    # For larger ones, add index and rely on tools
+    if total_slides <= 5:
+        # Small presentation: Add full content as conversation items
+        # Use role: "user" per OpenAI docs - this is data context, not instructions
+        logger.info(f"   📚 Adding FULL content of {total_slides} slides to conversation (small presentation)")
+        
+        for slide in presentation_manager.slides:
+            slide_num = slide['index'] + 1
+            title = slide.get('title', 'Untitled')
+            content = slide.get('content', '').strip()
+            notes = slide.get('notes', '').strip()
+            
+            # Create conversation item with slide data
+            slide_item = {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "user",  # Data context uses "user" role per OpenAI docs
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": f"""SLIDE {slide_num}: {title}
+
+Content:
+{content if content else "(Visual slide)"}
+
+{f'Notes: {notes}' if notes else ''}"""
+                        }
+                    ]
+                }
+            }
+            await vendor_ws.send(json.dumps(slide_item))
+            await asyncio.sleep(0.05)  # Small delay to avoid overwhelming the API
+        
+        logger.info(f"   ✅ Added full content of {total_slides} slides to conversation")
+        
+    else:
+        # Large presentation: Add index only, use tools for retrieval
+        # Per OpenAI docs: Use tools for on-demand data retrieval
+        logger.info(f"   📋 Adding slides INDEX to conversation ({total_slides} slides - using tools for content)")
+        
+        slides_summary = presentation_manager.get_all_slides_summary()
+        
+        # Add index as a conversation item (role: "user" for data context)
+        index_item = {
+            "type": "conversation.item.create",
+            "item": {
+                "type": "message",
+                "role": "user",  # Data context, not instructions
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": f"""PRESENTATION INDEX ({total_slides} slides):
+
+{slides_summary}
+
+Use get_slide(slide_number=X) tool to retrieve full content of any slide."""
+                    }
+                ]
+            }
+        }
+        
+        await vendor_ws.send(json.dumps(index_item))
+        logger.info(f"   ✅ Added slides index to conversation - tools will fetch content on-demand")
 
 
 async def send_session_config(vendor_ws):
@@ -294,128 +529,67 @@ async def send_session_config(vendor_ws):
 
 ⚠️ NO PRESENTATION LOADED YET:
    - Wait for the user to upload a presentation
-   - Once uploaded, you will receive the full presentation content
+   - Once uploaded, you will receive the full presentation content as conversation items
+   - Use the get_slide() and search_slides() tools to retrieve slide content
    - Do NOT make up content or reference slides that don't exist"""
     else:
-        instructions = """You are a PowerPoint presentation assistant. Your ONLY job is to present slides.
+        # CONCISE instructions per OpenAI docs - data goes in conversation items, not here
+        current_slide = presentation_manager.current_slide_index + 1
+        total_slides = len(presentation_manager.slides)
+        
+        # Per OpenAI docs: Instructions should be concise, focus on behavior
+        # Data context is in conversation items (added separately)
+        if total_slides <= 5:
+            # Small presentation: Content is in conversation items, reference it directly
+            instructions = f"""You are presenting a {total_slides}-slide PowerPoint presentation.
 
-🚨 CRITICAL: THIS IS A NEW PRESENTATION SESSION 🚨
+The slide content is available in the conversation items above. Read the content directly from those items.
 
-📊 YOU HAVE FULL ACCESS TO ALL SLIDE CONTENT:
-   - ALL slides with COMPLETE content are provided below in JSON format
-   - Each slide includes: slide_number (1-based), index (0-based), title, content (FULL text), and notes
-   - You can answer questions directly from the content below - you have ALL the information
-   - When referencing a slide, use show_slide(slide_number) to display it to the user
-   - Slide numbers are 1-based (slide 1, slide 2, etc.) - use these for show_slide()
+WORKFLOW:
+- When presenting: Read content from conversation items, call show_slide(slide_number=X) to update display
+- When user asks questions: Search conversation items for answers, call show_slide() to show relevant slide
+- Always call show_slide() before presenting to sync the display
 
-⚠️ ABSOLUTE REQUIREMENT: IGNORE AND FORGET ALL PREVIOUS PRESENTATION CONTENT.
-   - Do NOT reference ANY slides, topics, or content from previous conversations
-   - Do NOT mention slide numbers that don't exist in the content below
-   - Do NOT talk about "Urban Mobility", "Energy Grids", "Shuttles", or any other old topics
-   - ONLY use the presentation content provided BELOW in this message
-   - The presentation content below is the ONLY valid content - everything else is OLD and INVALID
+RULES:
+✅ Read content directly from conversation items
+✅ Call show_slide() before presenting
+✅ Use exact content from conversation items
+❌ Never make up content
 
-PRESENTATION RULES:
+Start with slide {current_slide} - read its content from the conversation items above."""
+        else:
+            # Large presentation: Use tools for on-demand retrieval
+            instructions = f"""You are presenting a {total_slides}-slide PowerPoint presentation.
 
-1. When you receive a message to start presenting:
-   - IMMEDIATELY start presenting slide 1 (slide_number: 1) content WITHOUT any greeting
-   - Do NOT say "Hello", "Welcome", "I'll help you", or anything similar
-   - Start directly with the slide title and content from the JSON data below
-   - You have ALL slide content in the JSON below - use it directly
-   - Call show_slide(slide_number=1) to display the first slide
+An index of slides is in the conversation items. Use tools to retrieve full content on-demand.
 
-2. Slide numbering:
-   - Slides are numbered starting from 1 (slide_number: 1, 2, 3, etc.)
-   - Do NOT make up slide numbers - only reference slides that exist in the JSON below
-   - If you see content about slide 256 or other high numbers, that's OLD content - IGNORE IT
+TOOLS:
+- get_slide(slide_number=X): Get full content of a slide
+- search_slides(query): Find slides matching keywords  
+- show_slide(slide_number=X): Display slide to user (always call before presenting)
+- get_current_slide(): Get current slide
 
-3. After presenting each slide:
-   - Automatically call show_slide(slide_number=X) to display the next slide (where X is the next slide number)
-   - Present the next slide's content from the JSON below
-   - Continue through all slides unless interrupted
+WORKFLOW:
+- When presenting: Call get_slide() → show_slide() → read content from tool result
+- When user asks: Call search_slides() → get_slide() → show_slide() → answer from tool result
 
-4. When user asks questions (ABOUT ANY TOPIC):
-   - 🚨 MANDATORY: Whenever you use content from a specific slide to answer a question, you MUST automatically call show_slide(slide_number) to display that slide
-   - The frontend will automatically scroll to the slide you reference - this is automatic and expected behavior
-   - You have ALL slide content available below in JSON format - use it directly to answer questions
-   - When answering ANY question:
-     a) Identify which slide(s) contain the relevant information from the JSON below
-     b) Answer using the content from that slide
-     c) IMMEDIATELY call show_slide(slide_number=X) where X is the slide number you're referencing
-   - This ensures the user sees the slide you're talking about while you answer
-   - Do NOT make up content - use the actual content from the JSON below
-   - After answering, you can continue presenting from where you left off
-   
-   EXAMPLES:
-   - User asks "What are the key features?":
-     → Review the JSON below to find which slide discusses features (e.g., slide 3)
-     → Answer using the content from that slide in the JSON
-     → MANDATORY: Call show_slide(slide_number=3) to automatically display it
-   
-   - User asks "What's on slide 3?" or "Tell me about slide 3":
-     → Find slide_number: 3 in the JSON below
-     → Answer using that slide's content
-     → MANDATORY: Call show_slide(slide_number=3) to automatically display it
-   
-   - User asks "Tell me about pricing":
-     → Review the JSON below to find which slide discusses pricing (e.g., slide 5)
-     → Answer using that slide's content
-     → MANDATORY: Call show_slide(slide_number=5) to automatically display it
-   
-   - User asks "What are the benefits?":
-     → Find the slide about benefits (e.g., slide 4)
-     → Answer using that slide's content
-     → MANDATORY: Call show_slide(slide_number=4) BEFORE or WHILE answering
+RULES:
+✅ Always call tools before answering questions
+✅ Always call show_slide() before presenting
+✅ Use exact content from tool results
+❌ Never say "I don't have content" without calling tools first
 
-ABSOLUTE RULES:
-- NEVER start with greetings or introductions
-- NEVER ask "Are you ready?" or "Shall I begin?"
-- ALWAYS start directly with slide content
-- NEVER reference old presentations or topics
-- NEVER mention slide numbers that don't exist in the content below
-- Use the JSON data below to answer questions - it contains FULL content for all slides
-- 🚨 MANDATORY: When answering ANY question using content from a specific slide, you MUST call show_slide(slide_number) to automatically display that slide to the user
-- The frontend will automatically scroll to the slide - this is the expected behavior
-- Do NOT make up slide content - use the actual content from the JSON below
-- IGNORE any previous presentation content - ONLY use the content provided below
-- NEVER say "I don't have the details" - you have ALL slide content in the JSON below
-- When you reference information from a slide, ALWAYS show that slide automatically - don't wait for explicit requests
-
-Your first words should be about slide 1's content, not about yourself or the presentation.
-
-=== COMPLETE PRESENTATION DATA (JSON FORMAT - ALL SLIDES WITH FULL CONTENT) ===
-You have access to ALL slides with COMPLETE content in JSON format below.
-Each slide contains:
-- slide_number: 1-based slide number (use this for show_slide tool)
-- index: 0-based index (for internal reference)
-- title: Full slide title
-- content: COMPLETE slide content (all text from the slide)
-- notes: Speaker notes (if any)
-
-Use this data directly to answer questions. When you want to show a slide to the user, call show_slide(slide_number).
-
-""" + presentation_data + """
-
-=== END OF PRESENTATION DATA ===
-
-⚠️ CRITICAL REMINDER: The JSON data above contains ALL slides with FULL content. Use this data to answer ALL questions. When you reference any slide, IMMEDIATELY call show_slide(slide_number) to display it.
-
-REMEMBER: 
-- Start immediately with slide 1 content. No greetings.
-- Ignore any old presentation content.
-- Do NOT reference slides that don't exist in the JSON above.
-- This is a NEW presentation - forget everything from before.
-- You have ALL slide content in the JSON above - use it directly to answer questions.
-- 🚨 CRITICAL: When answering questions using content from a specific slide, ALWAYS automatically call show_slide(slide_number) to display that slide - the frontend will automatically scroll to it. This is MANDATORY, not optional."""
+Start with slide {current_slide} - call get_slide(slide_number={current_slide}), then show_slide(), then present."""
     
     session_config = {
         "type": "session.update",
         "session": {
-            "modalities": ["audio"],
+            "modalities": ["text", "audio"],  # Both text and audio for better content processing
             "voice": "alloy",
             "instructions": instructions,
             "input_audio_format": "pcm16",
             "output_audio_format": "pcm16",
+            "temperature": 0,  # Deterministic - follow instructions strictly
             "input_audio_transcription": {
                 "model": "whisper-1"
             },
@@ -427,14 +601,51 @@ REMEMBER:
                 "interrupt_response": True,  # Allow user to interrupt assistant's responses
             },
             "tools": TOOL_DEFINITIONS,
-            "tool_choice": "auto",  # "auto" allows AI to choose when to use tools
+            "tool_choice": "auto",  # Auto at session level - use 'required' only in response.create
         }
     }
     
     config_json = json.dumps(session_config)
-    logger.info(f"📤 Sending session config to OpenAI (size: {len(config_json)} chars)")
-    logger.info(f"   Instructions length: {len(instructions)} chars")
+    
+    # Estimate token count (rough: ~4 chars per token)
+    estimated_tokens = len(instructions) // 4
+    tool_tokens = len(json.dumps(TOOL_DEFINITIONS)) // 4
+    total_estimated = estimated_tokens + tool_tokens
+    
+    logger.info(f"📤 Sending session config to OpenAI")
+    logger.info(f"   Instructions length: {len(instructions)} chars (~{estimated_tokens} tokens)")
+    logger.info(f"   Tools length: {len(json.dumps(TOOL_DEFINITIONS))} chars (~{tool_tokens} tokens)")
+    logger.info(f"   Total estimated: ~{total_estimated} tokens")
+    logger.info(f"   OpenAI limit: 16,384 tokens for instructions + tools")
     logger.info(f"   Presentation data included: {'YES' if presentation_manager.slides else 'NO'}")
+    
+    # Check for potential truncation (OpenAI Realtime API limit: 16,384 tokens)
+    if total_estimated > 16384:
+        logger.error(f"   ❌❌❌ CRITICAL: Estimated tokens ({total_estimated}) EXCEED limit (16,384)!")
+        logger.error(f"   ❌❌❌ OpenAI will TRUNCATE instructions - AI will NOT see all slides!")
+        # Calculate how many slides would fit
+        if len(presentation_manager.slides) > 0:
+            slides_per_token = len(presentation_manager.slides) / total_estimated
+            visible_slides = int(16384 * slides_per_token)
+            logger.error(f"   ❌❌❌ Only first ~{visible_slides} slides will be visible out of {len(presentation_manager.slides)}!")
+    elif total_estimated > 14000:
+        logger.warning(f"   ⚠️⚠️⚠️ WARNING: Estimated tokens ({total_estimated}) approaching limit!")
+        logger.warning(f"   ⚠️⚠️⚠️ Consider using compact summaries (already implemented)")
+    
+    # CRITICAL: Verify slide count in instructions
+    if presentation_manager.slides:
+        slide_count_in_instructions = instructions.count('"slide_number":')
+        logger.info(f"   🔍 Slide entries in instructions: {slide_count_in_instructions}")
+        logger.info(f"   🔍 Expected slides: {len(presentation_manager.slides)}")
+        if slide_count_in_instructions != len(presentation_manager.slides):
+            logger.error(f"   ❌❌❌ MISMATCH: Instructions contain {slide_count_in_instructions} slides but {len(presentation_manager.slides)} slides exist!")
+            logger.error(f"   ❌❌❌ This means some slides are missing from the AI's context!")
+        else:
+            logger.info(f"   ✅ All {len(presentation_manager.slides)} slides are present in instructions")
+    
+    if presentation_data and len(presentation_data) > 50000:
+        logger.warning(f"   ⚠️ Presentation data is large ({len(presentation_data)} chars)")
+        logger.warning(f"   ⚠️ Using compact summaries to fit within token limits")
     if presentation_manager.slides:
         logger.info(f"   Number of slides in data: {len(presentation_manager.slides)}")
         # Verify presentation_data is actually in instructions
@@ -447,6 +658,16 @@ REMEMBER:
         # Log a snippet showing the actual JSON data
         if presentation_data:
             logger.info(f"   📄 Presentation data preview (first 500 chars): {presentation_data[:500]}...")
+            # Check if slide 5 is mentioned in the data
+            if '"slide_number": 5' in presentation_data or '"slide_number":5' in presentation_data:
+                logger.info(f"   ✅ Slide 5 is present in presentation_data")
+            else:
+                logger.error(f"   ❌❌❌ Slide 5 NOT found in presentation_data!")
+            # Count how many slide_number entries are in the data
+            slide_count_in_data = presentation_data.count('"slide_number":')
+            logger.info(f"   📊 Slide entries found in presentation_data: {slide_count_in_data}")
+            if slide_count_in_data != len(presentation_manager.slides):
+                logger.error(f"   ❌❌❌ MISMATCH: Expected {len(presentation_manager.slides)} slides but found {slide_count_in_data} entries in data!")
         logger.info(f"   📄 Instructions preview (last 500 chars): {instructions[-500:]}")
     
     await vendor_ws.send(config_json)
@@ -512,15 +733,26 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                     logger.info(f"   First slide title: '{first_slide.get('title', 'N/A')}'")
                     logger.info(f"   First slide content preview: '{first_slide.get('content', '')[:200]}...'")
                     
-                    # CRITICAL: Update session config with NEW presentation context FIRST
+                    # Note: We don't clear conversation here as OpenAI Realtime API manages it
+                    # Instead, we rely on the session.update to provide fresh context
+                    logger.info("   📝 Session will be updated with new presentation context")
+                    
+                    # CRITICAL: Update session config with NEW presentation context
                     # This ensures OpenAI has the latest presentation content in its instructions
                     logger.info("   🔄 Updating session config with presentation content...")
                     await send_session_config(vendor_ws)
                     logger.info("   ✅ Session config updated with NEW presentation content")
                     logger.info("   ⏳ Waiting for OpenAI to process session update...")
                     # Longer delay to ensure config is fully processed by OpenAI
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(1.5)
                     logger.info("   ✅ Proceeding with presentation start")
+                    
+                    # Add presentation data as conversation items (per OpenAI docs best practice)
+                    # This ensures all slide data is in conversation context, not just instructions
+                    logger.info("   📚 Adding presentation data as conversation items...")
+                    await add_presentation_to_conversation(vendor_ws)
+                    logger.info("   ✅ Presentation data added to conversation")
+                    await asyncio.sleep(0.5)
                     
                     # Navigate to first slide
                     result = presentation_manager.navigate_to_slide("jump", 0)
@@ -537,8 +769,8 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                     })
                     logger.info(f"   📺 Initial slide set: index=0, title='{slide_data.get('title', 'N/A')}'")
                     
-                    # Send a simple message to start presenting
-                    # All slide content is already in the instructions JSON, so AI has full access
+                    # Send start message - AI should use tools to get slide content
+                    # Per OpenAI docs: Use tools to retrieve data, don't embed everything
                     start_message_text = {
                         "type": "conversation.item.create",
                         "item": {
@@ -547,21 +779,41 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                             "content": [
                                 {
                                     "type": "input_text",
-                                    "text": "Start presenting the slides. Begin with slide 1. Use show_slide(slide_number=1) to display it, then present its content from the JSON data in your instructions."
+                                    "text": "Start presenting the presentation. Begin with slide 1."
                                 }
                             ]
                         }
                     }
                     await vendor_ws.send(json.dumps(start_message_text))
-                    logger.info("   🔄 Sent start message - AI has all slide content in instructions JSON")
-                    await asyncio.sleep(0.5)
+                    logger.info("   🔄 Sent start message - AI will use tools to get slide content")
+                    await asyncio.sleep(0.3)
                     
-                    # Request a response - AI should use content from instructions JSON
-                    start_message = {
-                        "type": "response.create",
-                    }
+                    # Request a response
+                    # Per OpenAI docs: Use tool_choice="required" only when tools are necessary
+                    # For small presentations with content in conversation, "auto" is fine
+                    total_slides = len(presentation_manager.slides)
+                    if total_slides <= 5:
+                        # Small presentation: Content in conversation, tools optional for navigation
+                        start_message = {
+                            "type": "response.create",
+                            "response": {
+                                "modalities": ["text", "audio"],
+                                "tool_choice": "auto"  # Content in conversation, tools for navigation
+                            }
+                        }
+                        logger.info("✅ Presentation start requested - content in conversation, tools optional")
+                    else:
+                        # Large presentation: Must use tools to get content
+                        start_message = {
+                            "type": "response.create",
+                            "response": {
+                                "modalities": ["text", "audio"],
+                                "tool_choice": "required"  # Must use tools to retrieve content
+                            }
+                        }
+                        logger.info("✅ Presentation start requested - AI must call tools to get content")
+                    
                     await vendor_ws.send(json.dumps(start_message))
-                    logger.info("✅ Presentation start requested - AI has full access to all slides in JSON")
                 
                 elif data.get("type") == "navigate_slide":
                     # Manual slide navigation from user
@@ -608,6 +860,9 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
     async def vendor_to_client():
         """Relay messages from OpenAI to client, converting format."""
         nonlocal session_configured
+        # Track current response and whether it has function calls
+        current_response_id = None
+        current_response_has_function_call = False
         try:
             while True:
                 # Receive message from OpenAI (could be text or binary)
@@ -704,7 +959,7 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                                     "interrupt_response": True,
                                 },
                                 "tools": TOOL_DEFINITIONS,
-                                "tool_choice": "auto",
+                                "tool_choice": "auto",  # AI decides when to use tools
                             }
                         }
                         await vendor_ws.send(json.dumps(minimal_config))
@@ -730,10 +985,18 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                         logger.warning("Received response.audio.delta with empty delta")
                 
                 elif event_type == "response.output_item.added":
-                    # Output item added (could be audio or text)
+                    # Output item added (could be audio, text, or function_call)
                     item = data.get("item", {})
                     item_type = item.get("type")
                     logger.info(f"🎯 Output item added: {item_type}")
+                    
+                    if item_type == "function_call":
+                        # Function call added - we'll handle it when done
+                        function_name = item.get('name', 'unknown')
+                        logger.info(f"   🔧 Function call ADDED: {function_name}")
+                        logger.info(f"   📋 Function call details: {json.dumps(item, indent=2)[:500]}...")
+                        # Track that this response has a function call
+                        current_response_has_function_call = True
                     
                     if item_type == "audio":
                         # Audio item added - check all possible audio fields
@@ -759,22 +1022,40 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                         # Text item added
                         text = item.get("text", "")
                         if text:
+                            # Check if AI is trying to output JSON instead of calling a tool
+                            # This happens when AI outputs {"slide_number":3} instead of calling show_slide()
+                            try:
+                                parsed_json = json.loads(text.strip())
+                                if isinstance(parsed_json, dict) and "slide_number" in parsed_json:
+                                    slide_num = parsed_json["slide_number"]
+                                    logger.warning(f"⚠️ AI output JSON instead of calling tool! Converting to show_slide({slide_num})")
+                                    # Convert to tool call
+                                    await handle_tool_call(vendor_ws, client_ws, {
+                                        "name": "show_slide",
+                                        "call_id": f"auto_{slide_num}",
+                                        "arguments": json.dumps({"slide_number": slide_num})
+                                    })
+                                    # Don't forward the JSON text to client
+                                    continue
+                            except (json.JSONDecodeError, ValueError):
+                                pass  # Not JSON, forward normally
+                            
                             await client_ws.send_json({
                                 "type": "text",
                                 "text": text,
                                 "role": "assistant"
                             })
-                    elif item_type == "function_call":
-                        # Function call added - we'll handle it when done
-                        logger.info(f"Function call added: {item.get('name')}")
                     else:
                         logger.debug(f"Output item type '{item_type}' not handled")
                 
                 elif event_type == "response.text.delta":
                     # Text delta from OpenAI
+                    text_delta = data.get("delta", "")
+                    # Check if this looks like JSON being streamed (e.g., {"slide_number":3})
+                    # We'll accumulate and check in response.text.done
                     await client_ws.send_json({
                         "type": "text",
-                        "text": data.get("delta", ""),
+                        "text": text_delta,
                         "role": "assistant"
                     })
                 
@@ -804,17 +1085,101 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                                 "role": "user"
                             })
                             logger.info(f"📝 User transcript: {transcript}")
-                            # Check if this looks like a question that should trigger tool usage
-                            question_indicators = ["what", "tell me", "explain", "how", "why", "which", "where", "when", "dive", "more", "about"]
+                            
+                            # Detect navigation requests and inject slide content
                             transcript_lower = transcript.lower()
-                            if any(indicator in transcript_lower for indicator in question_indicators):
-                                logger.info(f"   ⚠️ This looks like a question - AI should call get_slide_content() tool!")
+                            navigation_next = ["next slide", "next", "continue", "go on", "move on", "next one"]
+                            navigation_prev = ["previous slide", "previous", "back", "go back"]
+                            
+                            is_next = any(nav in transcript_lower for nav in navigation_next)
+                            is_prev = any(nav in transcript_lower for nav in navigation_prev)
+                            
+                            if (is_next or is_prev) and presentation_manager.slides:
+                                # Navigate internally
+                                action = "next" if is_next else "prev"
+                                result = presentation_manager.navigate_to_slide(action)
+                                new_slide_num = result.get("current_slide_index", 0) + 1
+                                
+                                # Get the slide content
+                                slide_data = presentation_manager.get_current_slide()
+                                title = slide_data.get("title", f"Slide {new_slide_num}")
+                                content = slide_data.get("content", "").strip()
+                                
+                                logger.info(f"   🎯 Navigation detected: {action} → Slide {new_slide_num}")
+                                logger.info(f"   📄 Injecting content: '{content[:200]}...'")
+                                
+                                # Notify client of slide change
+                                await client_ws.send_json({
+                                    "type": "slide_changed",
+                                    "slideIndex": new_slide_num - 1,
+                                    "slideData": slide_data
+                                })
+                                
+                                # Inject the slide content into the conversation as a system message
+                                content_message = {
+                                    "type": "conversation.item.create",
+                                    "item": {
+                                        "type": "message",
+                                        "role": "user",
+                                        "content": [
+                                            {
+                                                "type": "input_text",
+                                                "text": f"""Now showing slide {new_slide_num}. Here is the content to present:
+
+=== SLIDE {new_slide_num}: {title} ===
+
+{content if content else "(Visual slide - describe what you see)"}
+
+=== END OF SLIDE ===
+
+Read this content out loud now. Do NOT ask for more content - it's all here."""
+                                            }
+                                        ]
+                                    }
+                                }
+                                await vendor_ws.send(json.dumps(content_message))
+                                logger.info(f"   ✅ Injected slide {new_slide_num} content into conversation")
+                            
+                            # Log question detection for monitoring (no fallback action)
+                            question_indicators = ["what", "tell me", "explain", "how", "why", "which", "where", "when", "who", "dive", "more", "about", "investors", "features", "pricing", "team"]
+                            is_question = any(indicator in transcript_lower for indicator in question_indicators) or transcript.strip().endswith("?")
+                            
+                            if is_question and presentation_manager.slides:
+                                logger.info(f"   🔍 Question detected: '{transcript}'")
+                                logger.info(f"   ℹ️ Expecting: search_slides() → show_slide() → answer (per ReAct pattern)")
                     elif item_type == "function_call":
                         # Handle function calls created in conversation
                         function_name = item.get('name', 'unknown')
                         logger.info(f"🔧 Function call detected in conversation.item.created: {function_name}")
                         logger.info(f"   📋 Function call details: {json.dumps(item, indent=2)[:500]}...")
+                        # Track that this response has a function call
+                        current_response_has_function_call = True
                         await handle_tool_call(vendor_ws, client_ws, item)
+                
+                elif event_type == "response.text.done":
+                    # Handle completed text output - check if AI output JSON instead of calling tools
+                    text = data.get("text", "")
+                    if text:
+                        logger.info(f"📝 Text output completed: {text[:200]}...")
+                        # CRITICAL: Check if AI is outputting JSON instead of calling tools
+                        # This happens when AI outputs {"slide_number":3} instead of calling show_slide()
+                        try:
+                            parsed_json = json.loads(text.strip())
+                            if isinstance(parsed_json, dict) and "slide_number" in parsed_json:
+                                slide_num = parsed_json["slide_number"]
+                                logger.warning(f"⚠️⚠️⚠️ AI OUTPUT JSON INSTEAD OF CALLING TOOL!")
+                                logger.warning(f"   Text: {text}")
+                                logger.warning(f"   Converting to show_slide({slide_num})")
+                                # Convert to tool call
+                                await handle_tool_call(vendor_ws, client_ws, {
+                                    "name": "show_slide",
+                                    "call_id": f"auto_{slide_num}_{int(time.time())}",
+                                    "arguments": json.dumps({"slide_number": slide_num})
+                                })
+                                # Don't forward the JSON text to client
+                                continue
+                        except (json.JSONDecodeError, ValueError):
+                            pass  # Not JSON, forward normally
                 
                 elif event_type == "response.output_item.done":
                     # Handle completed output items (including function calls)
@@ -826,6 +1191,8 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                         function_name = item.get('name', 'unknown')
                         logger.info(f"🔧 Function call detected in response.output_item.done: {function_name}")
                         logger.info(f"   📋 Function call details: {json.dumps(item, indent=2)[:500]}...")
+                        # Track that this response has a function call
+                        current_response_has_function_call = True
                         await handle_tool_call(vendor_ws, client_ws, item)
                     elif item_type == "audio":
                         # Handle audio output items
@@ -840,6 +1207,26 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                         # Handle text output items
                         text = item.get("text", "")
                         if text:
+                            # CRITICAL: Check if AI is outputting JSON instead of calling tools
+                            # This happens when AI outputs {"slide_number":3} instead of calling show_slide()
+                            try:
+                                parsed_json = json.loads(text.strip())
+                                if isinstance(parsed_json, dict) and "slide_number" in parsed_json:
+                                    slide_num = parsed_json["slide_number"]
+                                    logger.warning(f"⚠️⚠️⚠️ AI OUTPUT JSON INSTEAD OF CALLING TOOL!")
+                                    logger.warning(f"   Text: {text}")
+                                    logger.warning(f"   Converting to show_slide({slide_num})")
+                                    # Convert to tool call
+                                    await handle_tool_call(vendor_ws, client_ws, {
+                                        "name": "show_slide",
+                                        "call_id": f"auto_{slide_num}_{int(time.time())}",
+                                        "arguments": json.dumps({"slide_number": slide_num})
+                                    })
+                                    # Don't forward the JSON text to client
+                                    continue
+                            except (json.JSONDecodeError, ValueError):
+                                pass  # Not JSON, forward normally
+                            
                             await client_ws.send_json({
                                 "type": "text",
                                 "text": text,
@@ -862,10 +1249,12 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                 elif event_type == "response.started":
                     await client_ws.send_json({"type": "response.started"})
                     logger.info("Response started - expecting audio/text deltas")
-                    # Log response details
+                    # Log response details and track response
                     response_id = data.get("response", {}).get("id") if isinstance(data.get("response"), dict) else None
                     if response_id:
                         logger.info(f"Response ID: {response_id}")
+                        current_response_id = response_id
+                        current_response_has_function_call = False  # Reset tracking
                 
                 elif event_type == "response.done":
                     await client_ws.send_json({"type": "response.done"})
@@ -902,10 +1291,23 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                         else:
                             logger.warning("   ⚠️ No output items in response.done - response may have failed")
                         
-                        # Warn if no function calls were made (AI might be skipping tools)
-                        if not has_function_call and output_items:
-                            logger.warning("   ⚠️⚠️⚠️ WARNING: Response completed WITHOUT any function calls!")
-                            logger.warning("   ⚠️⚠️⚠️ If user asked about a slide, AI should have called get_slide_content()")
+                        # Check if this response had any function calls (check both tracking methods)
+                        response_has_tool_call = has_function_call or current_response_has_function_call
+                        
+                        # Log if no function calls were made (for monitoring/debugging)
+                        if not response_has_tool_call and output_items:
+                            logger.warning("   ⚠️ Response completed WITHOUT function calls!")
+                            logger.warning("   ⚠️ tool_choice is 'required' but OpenAI didn't call a tool")
+                            logger.info("   ℹ️ Output items types: " + ", ".join([item.get("type", "unknown") for item in output_items]))
+                            # Note: With tool_choice="required", OpenAI should always call a tool.
+                            # If it didn't, we just log it rather than auto-inject (which caused loops).
+                            # Reset tracking for next response
+                            current_response_id = None
+                            current_response_has_function_call = False
+                        else:
+                            # Reset tracking for next response
+                            current_response_id = None
+                            current_response_has_function_call = False
                     # Also log full event for debugging
                     logger.debug(f"   Full response.done event: {json.dumps(data)[:500]}")
                 
@@ -1078,6 +1480,11 @@ async def upload_presentation(file: UploadFile = File(...)):
                 first_slide = result["slides"][0]
                 logger.info(f"   First slide title: {first_slide.get('title', 'N/A')}")
                 logger.info(f"   First slide content preview: {first_slide.get('content', '')[:200]}...")
+            
+            # Note: Session config will be updated when frontend sends start_presentation message
+            # or when next server.hello is received. This ensures AI has slide data.
+            logger.info(f"   ℹ️ Session configs will be updated when clients trigger start_presentation")
+            
             return {
                 "success": True,
                 "filename": file.filename,

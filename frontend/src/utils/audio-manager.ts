@@ -11,7 +11,7 @@ export class AudioManager {
   private reconnectTimeout: number | null = null;
   private shouldReconnect: boolean = true;
   private activeAudioSources: AudioBufferSourceNode[] = []; // Track active audio sources for interruption
-  
+
   private onSlideChanged?: (slide: any, total: number) => void;
 
   constructor(
@@ -26,7 +26,7 @@ export class AudioManager {
     console.log('[AudioManager] Connecting to WebSocket...');
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket('ws://localhost:8000/ws');
-      
+
       this.ws.onopen = () => {
         console.log('[AudioManager] Connected to server');
         // Only reset reconnect attempts if connection stays open for a bit
@@ -49,73 +49,73 @@ export class AudioManager {
         try {
           const data = JSON.parse(event.data);
           // console.log('[AudioManager] Received message type:', data.type); // Verbose
-          
+
           switch (data.type) {
             case 'audio':
               console.log('[AudioManager] Received audio chunk');
               await this.playAudio(data.data);
               break;
-            
+
             case 'text':
               console.log('[AudioManager] Received text:', data.text);
               this.onTranscript(data.text, data.role);
               break;
-            
+
             case 'interrupted':
               console.log('[AudioManager] Interrupted');
               this.clearAudioQueue();
               break;
-            
+
             case 'response.started':
               console.log('[AudioManager] Response started');
               // Could emit event for UI to show "speaking" indicator
               break;
-            
+
             case 'response.done':
               console.log('[AudioManager] Response done');
               // Could emit event for UI to hide "speaking" indicator
               break;
-            
+
             case 'speech_started':
               console.log('[AudioManager] User started speaking - interrupting assistant if speaking');
               // Clear audio queue when user starts speaking (interruption)
               this.clearAudioQueue();
               break;
-            
+
             case 'speech_stopped':
               console.log('[AudioManager] User stopped speaking');
               // Could emit event for UI to hide "listening" indicator
               break;
-            
+
             case 'error':
               console.error('[AudioManager] Error from backend:', data.error);
               break;
-            
+
             case 'response.created':
               console.log('[AudioManager] Response created');
               break;
-            
+
             case 'output_audio_buffer.started':
               console.log('[AudioManager] Audio output started');
               break;
-            
+
             case 'output_audio_buffer.speech_started':
               console.log('[AudioManager] Assistant started speaking');
               break;
-            
+
             case 'output_audio_buffer.speech_stopped':
               console.log('[AudioManager] Assistant stopped speaking');
               break;
-            
+
             case 'output_audio_buffer.interrupted':
               console.log('[AudioManager] Output audio buffer interrupted');
               this.clearAudioQueue();
               break;
-            
+
             case 'input_audio_buffer.committed':
               console.log('[AudioManager] Input audio buffer committed');
               break;
-            
+
             case 'slide_changed':
               console.log('[AudioManager] Slide changed:', data.slide_index, 'Total slides:', data.total_slides);
               console.log('[AudioManager] Slide data:', data.slide);
@@ -131,7 +131,7 @@ export class AudioManager {
                 console.warn('[AudioManager] slide_changed event missing slide data or callback');
               }
               break;
-            
+
             default:
               console.log('[AudioManager] Unknown message type:', data.type);
           }
@@ -142,10 +142,10 @@ export class AudioManager {
 
       this.ws.onclose = (event) => {
         console.log(`[AudioManager] Disconnected from server (code: ${event.code}, reason: ${event.reason || 'none'})`);
-        
+
         // Clear the WebSocket reference
         this.ws = null;
-        
+
         // Only stop recording if we're actually recording, not if we're still starting up
         if (this.isRecording && !this.isStarting) {
           // If we were recording, try to reconnect
@@ -183,12 +183,12 @@ export class AudioManager {
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
     }
-    
+
     this.reconnectAttempts++;
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 10000); // Exponential backoff, max 10s
-    
+
     console.log(`[AudioManager] Attempting to reconnect (${this.reconnectAttempts}/${this.maxReconnectAttempts}) in ${delay}ms...`);
-    
+
     this.reconnectTimeout = window.setTimeout(async () => {
       try {
         await this.connect();
@@ -240,40 +240,40 @@ export class AudioManager {
       this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       console.log('[AudioManager] User media obtained');
     } catch (e) {
-       console.error('[AudioManager] Failed to get user media:', e);
-       // Cleanup context if media fails
-       if (this.audioContext) {
-           await this.audioContext.close();
-           this.audioContext = null;
-       }
-       this.isStarting = false;
-       throw e;
+      console.error('[AudioManager] Failed to get user media:', e);
+      // Cleanup context if media fails
+      if (this.audioContext) {
+        await this.audioContext.close();
+        this.audioContext = null;
+      }
+      this.isStarting = false;
+      throw e;
     }
 
     // Check if audioContext was closed/nullified during async operations
     if (!this.audioContext || this.audioContext.state === 'closed') {
-        console.warn('[AudioManager] AudioContext was closed during startup, recreating...');
-        try {
-            this.audioContext = new AudioContext({ sampleRate: 24000 });
-            console.log('[AudioManager] AudioContext recreated');
-        } catch (e) {
-            console.warn('[AudioManager] Could not recreate AudioContext, falling back to default', e);
-            this.audioContext = new AudioContext();
-        }
+      console.warn('[AudioManager] AudioContext was closed during startup, recreating...');
+      try {
+        this.audioContext = new AudioContext({ sampleRate: 24000 });
+        console.log('[AudioManager] AudioContext recreated');
+      } catch (e) {
+        console.warn('[AudioManager] Could not recreate AudioContext, falling back to default', e);
+        this.audioContext = new AudioContext();
+      }
     }
 
     if (!this.audioContext) {
-        this.isStarting = false;
-        throw new Error("AudioContext is null after getUserMedia");
+      this.isStarting = false;
+      throw new Error("AudioContext is null after getUserMedia");
     }
 
     const source = this.audioContext.createMediaStreamSource(this.stream);
-    
+
     this.workletNode = new AudioWorkletNode(this.audioContext, 'audio-processor');
-    
+
     this.workletNode.port.onmessage = (event) => {
       const { type, data, message } = event.data;
-      
+
       if (type === 'log') {
         console.log('[AudioProcessor]', message);
         return;
@@ -281,24 +281,24 @@ export class AudioManager {
 
       if (type === 'audio') {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            // Convert Float32 to Int16
-            const float32Data = data;
-            const int16Data = this.float32ToInt16(float32Data);
-            
-            // Base64 encode
-            const base64Data = this.arrayBufferToBase64(int16Data.buffer);
-            
-            // console.log('[AudioManager] Sending audio chunk, size:', base64Data.length); // Verbose
-            try {
-                this.ws.send(JSON.stringify({
-                    type: 'audio',
-                    data: base64Data
-                }));
-            } catch (e) {
-                console.warn('[AudioManager] Failed to send audio chunk:', e);
-            }
+          // Convert Float32 to Int16
+          const float32Data = data;
+          const int16Data = this.float32ToInt16(float32Data);
+
+          // Base64 encode
+          const base64Data = this.arrayBufferToBase64(int16Data.buffer);
+
+          // console.log('[AudioManager] Sending audio chunk, size:', base64Data.length); // Verbose
+          try {
+            this.ws.send(JSON.stringify({
+              type: 'audio',
+              data: base64Data
+            }));
+          } catch (e) {
+            console.warn('[AudioManager] Failed to send audio chunk:', e);
+          }
         } else {
-            console.warn('[AudioManager] WebSocket not open, dropping audio chunk');
+          console.warn('[AudioManager] WebSocket not open, dropping audio chunk');
         }
       }
     };
@@ -309,34 +309,34 @@ export class AudioManager {
 
     this.isRecording = true;
     this.isStarting = false; // Mark startup as complete
-    
+
     // Ensure context is running (sometimes needed if created before gesture?)
     if (this.audioContext.state === 'suspended') {
-        console.log('[AudioManager] Resuming AudioContext...');
-        await this.audioContext.resume();
-        console.log('[AudioManager] AudioContext resumed');
+      console.log('[AudioManager] Resuming AudioContext...');
+      await this.audioContext.resume();
+      console.log('[AudioManager] AudioContext resumed');
     }
   }
 
   stopRecording() {
     console.log('[AudioManager] Stopping recording...');
-    
+
     this.isStarting = false; // Clear startup flag
     this.shouldReconnect = false; // Stop reconnection attempts
-    
+
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
     }
-    
+
     if (this.stream) {
-        this.stream.getTracks().forEach(track => track.stop());
-        this.stream = null;
+      this.stream.getTracks().forEach(track => track.stop());
+      this.stream = null;
     }
 
     if (this.workletNode) {
-        this.workletNode.disconnect();
-        this.workletNode = null;
+      this.workletNode.disconnect();
+      this.workletNode = null;
     }
 
     if (this.audioContext) {
@@ -345,13 +345,13 @@ export class AudioManager {
       // However, if stopRecording is called during startup failure cleanup, 
       // we need to be careful.
       if (this.audioContext.state !== 'closed') {
-          this.audioContext.close();
+        this.audioContext.close();
       }
       this.audioContext = null;
     }
-    
+
     this.isRecording = false;
-    
+
     if (this.ws) {
       this.ws.close();
       this.ws = null;
@@ -390,50 +390,50 @@ export class AudioManager {
 
   private async playAudio(base64Data: string) {
     if (!this.audioContext) {
-        // If audio context is missing, we can't play.
-        // It might be possible to re-initialize here, but usually it means we are stopped.
-        return;
+      // If audio context is missing, we can't play.
+      // It might be possible to re-initialize here, but usually it means we are stopped.
+      return;
     }
 
     try {
-        const arrayBuffer = this.base64ToArrayBuffer(base64Data);
-        const int16Array = new Int16Array(arrayBuffer);
-        const float32Array = new Float32Array(int16Array.length);
-        
-        for (let i = 0; i < int16Array.length; i++) {
-          float32Array[i] = int16Array[i] / 32768.0;
+      const arrayBuffer = this.base64ToArrayBuffer(base64Data);
+      const int16Array = new Int16Array(arrayBuffer);
+      const float32Array = new Float32Array(int16Array.length);
+
+      for (let i = 0; i < int16Array.length; i++) {
+        float32Array[i] = int16Array[i] / 32768.0;
+      }
+
+      // Check if context is valid before creating buffer
+      if (this.audioContext.state === 'closed') return;
+
+      const audioBuffer = this.audioContext.createBuffer(1, float32Array.length, 24000);
+      audioBuffer.getChannelData(0).set(float32Array);
+
+      const source = this.audioContext.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(this.audioContext.destination);
+
+      // Track this source so we can stop it if interrupted
+      this.activeAudioSources.push(source);
+
+      // Clean up source when it finishes playing
+      source.onended = () => {
+        const index = this.activeAudioSources.indexOf(source);
+        if (index > -1) {
+          this.activeAudioSources.splice(index, 1);
         }
+      };
 
-        // Check if context is valid before creating buffer
-        if (this.audioContext.state === 'closed') return;
+      const currentTime = this.audioContext.currentTime;
+      if (this.nextStartTime < currentTime) {
+        this.nextStartTime = currentTime;
+      }
 
-        const audioBuffer = this.audioContext.createBuffer(1, float32Array.length, 24000);
-        audioBuffer.getChannelData(0).set(float32Array);
-
-        const source = this.audioContext.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(this.audioContext.destination);
-
-        // Track this source so we can stop it if interrupted
-        this.activeAudioSources.push(source);
-        
-        // Clean up source when it finishes playing
-        source.onended = () => {
-          const index = this.activeAudioSources.indexOf(source);
-          if (index > -1) {
-            this.activeAudioSources.splice(index, 1);
-          }
-        };
-
-        const currentTime = this.audioContext.currentTime;
-        if (this.nextStartTime < currentTime) {
-          this.nextStartTime = currentTime;
-        }
-        
-        source.start(this.nextStartTime);
-        this.nextStartTime += audioBuffer.duration;
+      source.start(this.nextStartTime);
+      this.nextStartTime += audioBuffer.duration;
     } catch (e) {
-        console.error("[AudioManager] Error playing audio chunk:", e);
+      console.error("[AudioManager] Error playing audio chunk:", e);
     }
   }
 
@@ -442,7 +442,7 @@ export class AudioManager {
     if (count > 0) {
       console.log(`[AudioManager] Clearing audio queue - stopping ${count} active sources`);
     }
-    
+
     // Stop all currently playing audio sources
     const sourcesToStop = [...this.activeAudioSources]; // Copy array to avoid modification during iteration
     sourcesToStop.forEach((source) => {
@@ -454,13 +454,13 @@ export class AudioManager {
         // This is expected and fine - just continue
       }
     });
-    
+
     // Clear the array
     this.activeAudioSources = [];
-    
+
     // Reset timing for next audio
     if (this.audioContext) {
-        this.nextStartTime = this.audioContext.currentTime;
+      this.nextStartTime = this.audioContext.currentTime;
     }
   }
 }

@@ -156,24 +156,34 @@ function App() {
       }
 
       // Trigger AI to start presenting automatically
-      if (audioManager.current && audioManager.current.ws && audioManager.current.ws.readyState === WebSocket.OPEN) {
-        // Send a message to trigger presentation start
-        audioManager.current.ws.send(JSON.stringify({
-          type: 'start_presentation'
-        }));
-      } else {
+      const sendStartPresentation = () => {
+        if (audioManager.current?.ws?.readyState === WebSocket.OPEN) {
+          console.log('[App] Sending start_presentation message');
+          audioManager.current.ws.send(JSON.stringify({
+            type: 'start_presentation'
+          }));
+          return true;
+        }
+        return false;
+      };
+
+      // Try immediately if connected
+      if (!sendStartPresentation()) {
         // If not connected yet, wait for connection then start
+        console.log('[App] WebSocket not ready, waiting for connection...');
+        let attempts = 0;
+        const maxAttempts = 20; // 10 seconds total (20 * 500ms)
+        
         const checkConnection = setInterval(() => {
-          if (audioManager.current && audioManager.current.ws && audioManager.current.ws.readyState === WebSocket.OPEN) {
+          attempts++;
+          if (sendStartPresentation()) {
+            console.log('[App] start_presentation sent successfully');
             clearInterval(checkConnection);
-            audioManager.current.ws.send(JSON.stringify({
-              type: 'start_presentation'
-            }));
+          } else if (attempts >= maxAttempts) {
+            console.warn('[App] Failed to send start_presentation after', maxAttempts, 'attempts');
+            clearInterval(checkConnection);
           }
         }, 500);
-        
-        // Clear interval after 10 seconds
-        setTimeout(() => clearInterval(checkConnection), 10000);
       }
     } catch (error) {
       console.error('Error uploading presentation:', error);

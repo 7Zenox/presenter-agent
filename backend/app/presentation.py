@@ -48,6 +48,15 @@ class PresentationManager:
                 logger.info(f"✅ Loaded NEW presentation with {len(self.slides)} slides")
                 logger.info(f"   First slide title: '{first_slide['title']}'")
                 logger.info(f"   First slide content (first 200 chars): '{first_slide['content'][:200]}'")
+                
+                # Verify storage: Log a few slides to confirm they're stored
+                logger.info(f"   📦 Storage verification:")
+                logger.info(f"      - Total slides stored in memory: {len(self.slides)}")
+                if len(self.slides) > 4:
+                    slide_5 = self.slides[4]  # Index 4 = slide 5
+                    logger.info(f"      - Slide 5 stored: ✅ (title: '{slide_5['title'][:50]}...')")
+                    logger.info(f"      - Slide 5 content length: {len(slide_5['content'])} chars")
+                logger.info(f"   ✅ All slides stored in memory - get_slide() tool can fetch any slide on demand")
             else:
                 logger.warning("⚠️ Loaded presentation but no slides found!")
             
@@ -72,16 +81,52 @@ class PresentationManager:
         return f"Slide {slide.slide_id}"
     
     def _extract_content(self, slide) -> str:
-        """Extract all text content from slide."""
+        """Extract all text content from slide, including bullet points and nested text."""
         content_parts = []
+        title_text = slide.shapes.title.text.strip() if slide.shapes.title and slide.shapes.title.text else ""
         
-        for shape in slide.shapes:
+        def extract_text_from_shape(shape):
+            """Recursively extract text from a shape and its children."""
+            texts = []
+            
+            # Get direct text from shape
             if hasattr(shape, "text") and shape.text:
                 text = shape.text.strip()
-                if text and text != slide.shapes.title.text if slide.shapes.title else True:
-                    content_parts.append(text)
+                if text and text != title_text:
+                    texts.append(text)
+            
+            # Handle text frames (for bullet points and paragraphs)
+            if hasattr(shape, "text_frame"):
+                for paragraph in shape.text_frame.paragraphs:
+                    para_text = paragraph.text.strip()
+                    if para_text and para_text != title_text:
+                        texts.append(para_text)
+            
+            # Handle grouped shapes (recursively)
+            if hasattr(shape, "shapes"):
+                for sub_shape in shape.shapes:
+                    texts.extend(extract_text_from_shape(sub_shape))
+            
+            return texts
         
-        return "\n".join(content_parts)
+        # Extract text from all shapes
+        for shape in slide.shapes:
+            # Skip the title shape (we already have it separately)
+            if slide.shapes.title and shape == slide.shapes.title:
+                continue
+            
+            shape_texts = extract_text_from_shape(shape)
+            content_parts.extend(shape_texts)
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_parts = []
+        for part in content_parts:
+            if part and part not in seen:
+                seen.add(part)
+                unique_parts.append(part)
+        
+        return "\n".join(unique_parts)
     
     def _extract_notes(self, slide) -> str:
         """Extract speaker notes from slide."""
@@ -143,48 +188,80 @@ class PresentationManager:
         }
     
     def get_slide_content(self, slide_index: int) -> Dict:
-        """Get content of a specific slide."""
+        """Get content of a specific slide from memory storage.
+        
+        This fetches the full slide data (title, content, notes) that was stored
+        when the presentation was loaded. All slides are kept in memory for fast access.
+        """
         if not self.slides:
+            logger.error("❌ get_slide_content called but no slides in memory!")
             return {"error": "No presentation loaded"}
         
         if 0 <= slide_index < len(self.slides):
             slide = self.slides[slide_index].copy()
             slide["is_current"] = (slide_index == self.current_slide_index)
+            logger.info(f"   📦 Retrieved slide {slide_index + 1} from memory storage")
+            logger.info(f"      Title: '{slide.get('title', 'N/A')}'")
+            logger.info(f"      Content length: {len(slide.get('content', ''))} chars")
             return slide
         else:
+            logger.error(f"   ❌ Invalid slide_index {slide_index} (valid range: 0-{len(self.slides) - 1})")
             return {"error": f"Invalid slide index. Must be between 0 and {len(self.slides) - 1}"}
     
     def get_all_slides_summary(self) -> str:
-        """Get complete JSON dump of all slides with full content for the AI."""
+        """Get slide numbers, titles, and content previews for AI context.
+        
+        Returns slide numbers, titles, and a content preview (first 200 chars)
+        to give the AI enough context to search and navigate effectively
+        while staying within token limits.
+        """
         if not self.slides:
             return "No presentation loaded."
         
-        # Return JSON format with all slides - FULL CONTENT, NO SUMMARIES
-        # Add slide_number (1-based) to each slide for clarity
         import json
-        slides_with_number = []
+        # Create list with slide number, title, and content preview
+        slides_list = []
         for slide in self.slides:
-            slide_copy = slide.copy()
-            slide_copy['slide_number'] = slide['index'] + 1  # 1-based slide number
-            slides_with_number.append(slide_copy)
+            content = slide.get('content', '')
+            # Create a content preview - first 200 chars, clean up whitespace
+            content_preview = ' '.join(content.split())[:200]
+            if len(content) > 200:
+                content_preview += "..."
+            
+            slides_list.append({
+                "slide_number": slide['index'] + 1,  # 1-based
+                "title": slide.get('title', 'Untitled'),
+                "content_preview": content_preview,
+            })
         
-        slides_json = json.dumps(slides_with_number, indent=2)
+        slides_json = json.dumps(slides_list, indent=2, ensure_ascii=False)
         
-        return f"""COMPLETE PRESENTATION DATA (JSON format):
-Total slides: {len(self.slides)}
+        # Log summary stats
+        logger.info(f"📄 Generated slide list: {len(self.slides)} slides (numbers + titles only)")
+        logger.info(f"   Summary length: {len(slides_json)} chars (~{len(slides_json) // 4} tokens)")
+        
+        # Verify all slides are included
+        logger.info(f"   🔍 Verifying all slides included:")
+        logger.info(f"      Expected slides: {len(self.slides)}")
+        logger.info(f"      Actual entries: {len(slides_list)}")
+        if len(slides_list) != len(self.slides):
+            logger.error(f"   ❌❌❌ MISMATCH: Expected {len(self.slides)} slides but got {len(slides_list)} entries!")
+        
+        # Log slide numbers to verify they're sequential
+        slide_numbers = [s['slide_number'] for s in slides_list]
+        logger.info(f"   📋 Slide numbers: {slide_numbers[:10]}{'...' if len(slide_numbers) > 10 else ''}")
+        if len(slide_numbers) > 0:
+            logger.info(f"   📋 First slide: {slide_numbers[0]}, Last slide: {slide_numbers[-1]}")
+            if 5 in slide_numbers:
+                slide_5 = next(s for s in slides_list if s['slide_number'] == 5)
+                logger.info(f"   ✅ Slide 5 found: title='{slide_5.get('title', 'N/A')}'")
+            else:
+                logger.error(f"   ❌❌❌ Slide 5 NOT found! Available slides: {slide_numbers}")
+        
+        return f"""Total slides: {len(self.slides)}
 
-All slides with FULL content:
-{slides_json}
-
-Each slide contains:
-- slide_number: 1-based slide number (slide 1, slide 2, etc.) - USE THIS for show_slide() tool
-- index: 0-based index (for internal reference)
-- title: Full slide title
-- content: COMPLETE slide content (all text from the slide)
-- notes: Speaker notes (if any)
-
-You have access to ALL slide content above. Use this data to answer questions directly.
-When you want to show a slide to the user, call show_slide(slide_number) where slide_number is the 1-based number."""
+SLIDES (use get_slide(slide_number=X) tool to retrieve full content):
+{slides_json}"""
     
     def get_all_slides_json(self) -> str:
         """Get slides as JSON string for embedding in instructions."""
@@ -198,8 +275,39 @@ When you want to show a slide to the user, call show_slide(slide_number) where s
             slide_copy['slide_number'] = slide['index'] + 1  # 1-based slide number
             slides_with_number.append(slide_copy)
         return json.dumps(slides_with_number, indent=2)
+    
+    def get_full_presentation_for_ai(self) -> str:
+        """Get ALL slide content formatted for AI instructions.
+        
+        Returns full content of every slide in a readable text format
+        so the AI has all content in context without needing tool calls.
+        """
+        if not self.slides:
+            return "No presentation loaded."
+        
+        lines = [f"PRESENTATION: {len(self.slides)} slides total\n"]
+        lines.append("=" * 50 + "\n")
+        
+        for slide in self.slides:
+            slide_num = slide['index'] + 1
+            title = slide.get('title', 'Untitled')
+            content = slide.get('content', '').strip()
+            notes = slide.get('notes', '').strip()
+            
+            lines.append(f"--- SLIDE {slide_num}: {title} ---\n")
+            if content:
+                lines.append(f"CONTENT:\n{content}\n")
+            if notes:
+                lines.append(f"NOTES:\n{notes}\n")
+            lines.append("")
+        
+        result = "\n".join(lines)
+        logger.info(f"📄 Full presentation content: {len(result)} chars (~{len(result) // 4} tokens)")
+        return result
 
 
 # Global presentation manager instance
 presentation_manager = PresentationManager()
+
+
 
