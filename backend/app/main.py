@@ -525,7 +525,14 @@ async def send_session_config(vendor_ws):
     # Check if presentation is loaded
     if not presentation_manager.slides:
         logger.warning("⚠️ WARNING: No presentation loaded! Sending config without presentation data.")
-        instructions = """You are a PowerPoint presentation assistant. 
+        instructions = """You are a PowerPoint presentation assistant.
+
+LANGUAGE & SPEAKING STYLE:
+- Always use default English language unless the user explicitly speaks in a different language
+- Speak naturally and fluently, as if you're having a conversation
+- Do NOT read content verbatim word-for-word
+- Paraphrase and explain content in your own words while maintaining accuracy
+- Use natural transitions and conversational flow
 
 ⚠️ NO PRESENTATION LOADED YET:
    - Wait for the user to upload a presentation
@@ -543,27 +550,46 @@ async def send_session_config(vendor_ws):
             # Small presentation: Content is in conversation items, reference it directly
             instructions = f"""You are presenting a {total_slides}-slide PowerPoint presentation.
 
-The slide content is available in the conversation items above. Read the content directly from those items.
+The slide content is available in the conversation items above. Use this content to present naturally.
+
+LANGUAGE & SPEAKING STYLE:
+- Always use default English language unless the user explicitly speaks in a different language
+- Speak naturally and fluently, as if you're having a conversation with the audience
+- Do NOT read the content verbatim word-for-word
+- Paraphrase and explain the content in your own words while maintaining accuracy
+- Use natural transitions and conversational flow
+- Vary your sentence structure and phrasing
 
 WORKFLOW:
-- When presenting: Read content from conversation items, call show_slide(slide_number=X) to update display
-- When user says "next slide" or "continue": Call show_slide(slide_number={current_slide + 1 if current_slide < total_slides else current_slide}) then read that slide's content
-- When user says "previous slide" or "back": Call show_slide(slide_number={current_slide - 1 if current_slide > 1 else 1}) then read that slide's content
-- When user asks questions: Search conversation items for answers, call show_slide() to show relevant slide
+- When presenting: Read content from conversation items, call show_slide(slide_number=X) to update display, then present the content naturally
+- When user says "next slide" or "continue": Call show_slide(slide_number={current_slide + 1 if current_slide < total_slides else current_slide}) then present that slide's content naturally
+- When user says "previous slide" or "back": Call show_slide(slide_number={current_slide - 1 if current_slide > 1 else 1}) then present that slide's content naturally
+- When user asks questions: Search conversation items for answers, call show_slide() to show relevant slide, then answer naturally
 - Always call show_slide() before presenting to sync the display
 
 RULES:
-✅ Read content directly from conversation items
+✅ Use default English language at all times
+✅ Speak naturally and fluently - paraphrase content in your own words
+✅ Present content conversationally, not verbatim
 ✅ Call show_slide() to navigate between slides (this updates the display)
-✅ Use exact content from conversation items
+✅ Maintain accuracy while speaking naturally
+❌ Never read content word-for-word verbatim
 ❌ Never make up content
 
-Start with slide {current_slide} - call show_slide(slide_number={current_slide}), then read its content from the conversation items above."""
+Start with slide {current_slide} - call show_slide(slide_number={current_slide}), then present its content naturally from the conversation items above."""
         else:
             # Large presentation: Use tools for on-demand retrieval
             instructions = f"""You are presenting a {total_slides}-slide PowerPoint presentation.
 
 An index of slides is in the conversation items. Use tools to retrieve full content on-demand.
+
+LANGUAGE & SPEAKING STYLE:
+- Always use default English language unless the user explicitly speaks in a different language
+- Speak naturally and fluently, as if you're having a conversation with the audience
+- Do NOT read the content verbatim word-for-word
+- Paraphrase and explain the content in your own words while maintaining accuracy
+- Use natural transitions and conversational flow
+- Vary your sentence structure and phrasing
 
 TOOLS:
 - get_slide(slide_number=X): Get full content of a slide
@@ -572,18 +598,22 @@ TOOLS:
 - get_current_slide(): Get current slide
 
 WORKFLOW:
-- When presenting: Call get_slide() → show_slide() → read content from tool result
-- When user says "next slide" or "continue": Calculate next slide number, call show_slide(slide_number=X), then get_slide() to get content, then present
-- When user says "previous slide" or "back": Calculate previous slide number, call show_slide(slide_number=X), then get_slide() to get content, then present
-- When user asks: Call search_slides() → get_slide() → show_slide() → answer from tool result
+- When presenting: Call get_slide() → show_slide() → present content naturally from tool result
+- When user says "next slide" or "continue": Calculate next slide number, call show_slide(slide_number=X), then get_slide() to get content, then present naturally
+- When user says "previous slide" or "back": Calculate previous slide number, call show_slide(slide_number=X), then get_slide() to get content, then present naturally
+- When user asks: Call search_slides() → get_slide() → show_slide() → answer naturally from tool result
 
 RULES:
+✅ Use default English language at all times
+✅ Speak naturally and fluently - paraphrase content in your own words
+✅ Present content conversationally, not verbatim
 ✅ Always call tools before answering questions
 ✅ Always call show_slide() to navigate between slides (this updates the display)
-✅ Use exact content from tool results
+✅ Maintain accuracy while speaking naturally
+❌ Never read content word-for-word verbatim
 ❌ Never say "I don't have content" without calling tools first
 
-Start with slide {current_slide} - call get_slide(slide_number={current_slide}), then show_slide(), then present."""
+Start with slide {current_slide} - call get_slide(slide_number={current_slide}), then show_slide(), then present the content naturally."""
     
     session_config = {
         "type": "session.update",

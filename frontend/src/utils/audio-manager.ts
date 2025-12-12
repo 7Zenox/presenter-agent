@@ -1,7 +1,7 @@
 export class AudioManager {
   private audioContext: AudioContext | null = null;
   private workletNode: AudioWorkletNode | null = null;
-  private ws: WebSocket | null = null;
+  public ws: WebSocket | null = null;
   private isRecording: boolean = false;
   private isStarting: boolean = false;
   private nextStartTime: number = 0;
@@ -208,6 +208,8 @@ export class AudioManager {
     }, delay);
   }
 
+  public analyser: AnalyserNode | null = null; // Public so App can access it
+
   async startRecording() {
     console.log('[AudioManager] Starting recording...');
     if (this.isRecording) {
@@ -224,6 +226,11 @@ export class AudioManager {
       console.warn('[AudioManager] Could not set sample rate to 24000, falling back to default', e);
       this.audioContext = new AudioContext();
     }
+
+    // Create Analyser
+    this.analyser = this.audioContext.createAnalyser();
+    this.analyser.fftSize = 256; // 128 data points
+    this.analyser.smoothingTimeConstant = 0.8;
 
     try {
       console.log('[AudioManager] Adding audio worklet module...');
@@ -256,9 +263,14 @@ export class AudioManager {
       try {
         this.audioContext = new AudioContext({ sampleRate: 24000 });
         console.log('[AudioManager] AudioContext recreated');
+        // Re-create analyser
+        this.analyser = this.audioContext.createAnalyser();
+        this.analyser.fftSize = 256;
       } catch (e) {
         console.warn('[AudioManager] Could not recreate AudioContext, falling back to default', e);
         this.audioContext = new AudioContext();
+        this.analyser = this.audioContext.createAnalyser();
+        this.analyser.fftSize = 256;
       }
     }
 
@@ -348,6 +360,7 @@ export class AudioManager {
         this.audioContext.close();
       }
       this.audioContext = null;
+      this.analyser = null;
     }
 
     this.isRecording = false;
@@ -412,7 +425,14 @@ export class AudioManager {
 
       const source = this.audioContext.createBufferSource();
       source.buffer = audioBuffer;
-      source.connect(this.audioContext.destination);
+
+      // Connect to analyser if available, otherwise direct to destination
+      if (this.analyser) {
+        source.connect(this.analyser);
+        this.analyser.connect(this.audioContext.destination);
+      } else {
+        source.connect(this.audioContext.destination);
+      }
 
       // Track this source so we can stop it if interrupted
       this.activeAudioSources.push(source);
