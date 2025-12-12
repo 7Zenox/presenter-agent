@@ -34,7 +34,7 @@ class PresentationManager:
             for idx, slide in enumerate(self.presentation.slides):
                 slide_data = {
                     "index": idx,
-                    "title": self._extract_title(slide),
+                    "title": self._extract_title(slide, idx),
                     "content": self._extract_content(slide),
                     "notes": self._extract_notes(slide),
                 }
@@ -74,11 +74,14 @@ class PresentationManager:
                 "error": str(e),
             }
     
-    def _extract_title(self, slide) -> str:
+    def _extract_title(self, slide, slide_index: int) -> str:
         """Extract title from slide."""
-        if slide.shapes.title:
-            return slide.shapes.title.text.strip()
-        return f"Slide {slide.slide_id}"
+        if slide.shapes.title and slide.shapes.title.text:
+            title_text = slide.shapes.title.text.strip()
+            if title_text:
+                return title_text
+        # Fallback to slide number (1-based) if no title found
+        return f"Slide {slide_index + 1}"
     
     def _extract_content(self, slide) -> str:
         """Extract all text content from slide, including bullet points and nested text."""
@@ -89,18 +92,18 @@ class PresentationManager:
             """Recursively extract text from a shape and its children."""
             texts = []
             
-            # Get direct text from shape
-            if hasattr(shape, "text") and shape.text:
-                text = shape.text.strip()
-                if text and text != title_text:
-                    texts.append(text)
-            
-            # Handle text frames (for bullet points and paragraphs)
-            if hasattr(shape, "text_frame"):
+            # Handle text frames first (for bullet points and paragraphs)
+            # This gives us structured content with proper paragraph separation
+            if hasattr(shape, "text_frame") and shape.text_frame:
                 for paragraph in shape.text_frame.paragraphs:
                     para_text = paragraph.text.strip()
                     if para_text and para_text != title_text:
                         texts.append(para_text)
+            # Fallback to direct text only if no text_frame exists
+            elif hasattr(shape, "text") and shape.text:
+                text = shape.text.strip()
+                if text and text != title_text:
+                    texts.append(text)
             
             # Handle grouped shapes (recursively)
             if hasattr(shape, "shapes"):
