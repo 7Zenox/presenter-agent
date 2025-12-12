@@ -867,6 +867,7 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
         # Track current response and whether it has function calls
         current_response_id = None
         current_response_has_function_call = False
+        handled_call_ids = set()  # Track handled function call IDs to prevent duplicates
         try:
             while True:
                 # Receive message from OpenAI (could be text or binary)
@@ -1063,6 +1064,37 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                         "role": "assistant"
                     })
                 
+                elif event_type == "response.function_call_arguments.done":
+                    # Function call arguments are complete - this is when we should execute the function call
+                    # The item contains the function_call with complete arguments
+                    item = data.get("item", {})
+                    function_call = item.get("function_call", item)  # Try nested first, fallback to item itself
+                    
+                    function_name = function_call.get("name", "")
+                    call_id = function_call.get("call_id", "")
+                    arguments_str = function_call.get("arguments", "{}")
+                    
+                    if function_name and call_id:
+                        # Check if we've already handled this call_id
+                        if call_id in handled_call_ids:
+                            logger.info(f"⏭️ Skipping already-handled function call: {function_name} (call_id: {call_id})")
+                        else:
+                            handled_call_ids.add(call_id)
+                            logger.info(f"🔧🔧🔧 FUNCTION CALL ARGUMENTS COMPLETE 🔧🔧🔧")
+                            logger.info(f"   Function: {function_name}")
+                            logger.info(f"   Call ID: {call_id}")
+                            logger.info(f"   Arguments: {arguments_str}")
+                            
+                            # Handle the function call
+                            await handle_tool_call(vendor_ws, client_ws, {
+                                "name": function_name,
+                                "call_id": call_id,
+                                "arguments": arguments_str
+                            })
+                    else:
+                        logger.warning(f"⚠️ response.function_call_arguments.done missing function_name or call_id")
+                        logger.warning(f"   Item structure: {json.dumps(item, indent=2)[:500]}")
+                
                 elif event_type == "conversation.item.input_audio_transcription.completed":
                     # User transcription
                     item = data.get("item", {})
@@ -1103,12 +1135,20 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                                 logger.info(f"   ℹ️ Expecting: search_slides() → show_slide() → answer (per ReAct pattern)")
                     elif item_type == "function_call":
                         # Handle function calls created in conversation
+                        # Note: This might be redundant if response.function_call_arguments.done already handled it
                         function_name = item.get('name', 'unknown')
-                        logger.info(f"🔧 Function call detected in conversation.item.created: {function_name}")
-                        logger.info(f"   📋 Function call details: {json.dumps(item, indent=2)[:500]}...")
-                        # Track that this response has a function call
-                        current_response_has_function_call = True
-                        await handle_tool_call(vendor_ws, client_ws, item)
+                        call_id = item.get('call_id', '')
+                        
+                        if call_id and call_id in handled_call_ids:
+                            logger.info(f"⏭️ Skipping already-handled function call in conversation.item.created: {function_name} (call_id: {call_id})")
+                        else:
+                            if call_id:
+                                handled_call_ids.add(call_id)
+                            logger.info(f"🔧 Function call detected in conversation.item.created: {function_name}")
+                            logger.info(f"   📋 Function call details: {json.dumps(item, indent=2)[:500]}...")
+                            # Track that this response has a function call
+                            current_response_has_function_call = True
+                            await handle_tool_call(vendor_ws, client_ws, item)
                 
                 elif event_type == "response.text.done":
                     # Handle completed text output - check if AI output JSON instead of calling tools
@@ -1142,12 +1182,20 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                     
                     if item_type == "function_call":
                         # Handle tool/function call
+                        # Note: This might be redundant if response.function_call_arguments.done already handled it
                         function_name = item.get('name', 'unknown')
-                        logger.info(f"🔧 Function call detected in response.output_item.done: {function_name}")
-                        logger.info(f"   📋 Function call details: {json.dumps(item, indent=2)[:500]}...")
-                        # Track that this response has a function call
-                        current_response_has_function_call = True
-                        await handle_tool_call(vendor_ws, client_ws, item)
+                        call_id = item.get('call_id', '')
+                        
+                        if call_id and call_id in handled_call_ids:
+                            logger.info(f"⏭️ Skipping already-handled function call in response.output_item.done: {function_name} (call_id: {call_id})")
+                        else:
+                            if call_id:
+                                handled_call_ids.add(call_id)
+                            logger.info(f"🔧 Function call detected in response.output_item.done: {function_name}")
+                            logger.info(f"   📋 Function call details: {json.dumps(item, indent=2)[:500]}...")
+                            # Track that this response has a function call
+                            current_response_has_function_call = True
+                            await handle_tool_call(vendor_ws, client_ws, item)
                     elif item_type == "audio":
                         # Handle audio output items
                         audio_data = item.get("audio", "")
