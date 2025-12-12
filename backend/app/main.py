@@ -57,13 +57,13 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "name": "show_slide",
-        "description": "Display a specific slide to the user. Use this to navigate to a slide before referencing its content. The frontend will automatically scroll to the displayed slide. Always call this when you reference information from a specific slide.",
+        "description": "Navigate to and display a specific slide to the user. Use this tool to move between slides. When user says 'next slide', call this with the next slide number. When user says 'previous slide', call this with the previous slide number. The frontend will automatically scroll to the displayed slide. Always call this before presenting slide content to sync the display.",
         "parameters": {
             "type": "object",
             "properties": {
                 "slide_number": {
                     "type": "integer",
-                    "description": "Slide number (1-based). Slide 1 = 1, Slide 2 = 2, etc. Must match a slide_number from search_slides results."
+                    "description": "Slide number (1-based). Slide 1 = 1, Slide 2 = 2, etc. Use this to navigate: next slide = current + 1, previous slide = current - 1."
                 }
             },
             "required": ["slide_number"]
@@ -547,16 +547,18 @@ The slide content is available in the conversation items above. Read the content
 
 WORKFLOW:
 - When presenting: Read content from conversation items, call show_slide(slide_number=X) to update display
+- When user says "next slide" or "continue": Call show_slide(slide_number={current_slide + 1 if current_slide < total_slides else current_slide}) then read that slide's content
+- When user says "previous slide" or "back": Call show_slide(slide_number={current_slide - 1 if current_slide > 1 else 1}) then read that slide's content
 - When user asks questions: Search conversation items for answers, call show_slide() to show relevant slide
 - Always call show_slide() before presenting to sync the display
 
 RULES:
 ✅ Read content directly from conversation items
-✅ Call show_slide() before presenting
+✅ Call show_slide() to navigate between slides (this updates the display)
 ✅ Use exact content from conversation items
 ❌ Never make up content
 
-Start with slide {current_slide} - read its content from the conversation items above."""
+Start with slide {current_slide} - call show_slide(slide_number={current_slide}), then read its content from the conversation items above."""
         else:
             # Large presentation: Use tools for on-demand retrieval
             instructions = f"""You are presenting a {total_slides}-slide PowerPoint presentation.
@@ -571,11 +573,13 @@ TOOLS:
 
 WORKFLOW:
 - When presenting: Call get_slide() → show_slide() → read content from tool result
+- When user says "next slide" or "continue": Calculate next slide number, call show_slide(slide_number=X), then get_slide() to get content, then present
+- When user says "previous slide" or "back": Calculate previous slide number, call show_slide(slide_number=X), then get_slide() to get content, then present
 - When user asks: Call search_slides() → get_slide() → show_slide() → answer from tool result
 
 RULES:
 ✅ Always call tools before answering questions
-✅ Always call show_slide() before presenting
+✅ Always call show_slide() to navigate between slides (this updates the display)
 ✅ Use exact content from tool results
 ❌ Never say "I don't have content" without calling tools first
 
@@ -1086,59 +1090,9 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                             })
                             logger.info(f"📝 User transcript: {transcript}")
                             
-                            # Detect navigation requests and inject slide content
-                            transcript_lower = transcript.lower()
-                            navigation_next = ["next slide", "next", "continue", "go on", "move on", "next one"]
-                            navigation_prev = ["previous slide", "previous", "back", "go back"]
-                            
-                            is_next = any(nav in transcript_lower for nav in navigation_next)
-                            is_prev = any(nav in transcript_lower for nav in navigation_prev)
-                            
-                            if (is_next or is_prev) and presentation_manager.slides:
-                                # Navigate internally
-                                action = "next" if is_next else "prev"
-                                result = presentation_manager.navigate_to_slide(action)
-                                new_slide_num = result.get("current_slide_index", 0) + 1
-                                
-                                # Get the slide content
-                                slide_data = presentation_manager.get_current_slide()
-                                title = slide_data.get("title", f"Slide {new_slide_num}")
-                                content = slide_data.get("content", "").strip()
-                                
-                                logger.info(f"   🎯 Navigation detected: {action} → Slide {new_slide_num}")
-                                logger.info(f"   📄 Injecting content: '{content[:200]}...'")
-                                
-                                # Notify client of slide change
-                                await client_ws.send_json({
-                                    "type": "slide_changed",
-                                    "slideIndex": new_slide_num - 1,
-                                    "slideData": slide_data
-                                })
-                                
-                                # Inject the slide content into the conversation as a system message
-                                content_message = {
-                                    "type": "conversation.item.create",
-                                    "item": {
-                                        "type": "message",
-                                        "role": "user",
-                                        "content": [
-                                            {
-                                                "type": "input_text",
-                                                "text": f"""Now showing slide {new_slide_num}. Here is the content to present:
-
-=== SLIDE {new_slide_num}: {title} ===
-
-{content if content else "(Visual slide - describe what you see)"}
-
-=== END OF SLIDE ===
-
-Read this content out loud now. Do NOT ask for more content - it's all here."""
-                                            }
-                                        ]
-                                    }
-                                }
-                                await vendor_ws.send(json.dumps(content_message))
-                                logger.info(f"   ✅ Injected slide {new_slide_num} content into conversation")
+                            # Note: Navigation is handled via tools (show_slide, navigate_slide)
+                            # The AI will detect navigation requests and call the appropriate tool
+                            # No manual interception needed - let tools handle it
                             
                             # Log question detection for monitoring (no fallback action)
                             question_indicators = ["what", "tell me", "explain", "how", "why", "which", "where", "when", "who", "dive", "more", "about", "investors", "features", "pricing", "team"]
