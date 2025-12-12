@@ -12,8 +12,14 @@ export class AudioManager {
   private shouldReconnect: boolean = true;
   private activeAudioSources: AudioBufferSourceNode[] = []; // Track active audio sources for interruption
   
-  constructor(private onTranscript: (text: string, role: string) => void) {
+  private onSlideChanged?: (slide: any, total: number) => void;
+
+  constructor(
+    private onTranscript: (text: string, role: string) => void,
+    options?: { onSlideChanged?: (slide: any, total: number) => void }
+  ) {
     console.log('[AudioManager] Initialized');
+    this.onSlideChanged = options?.onSlideChanged;
   }
 
   async connect(): Promise<void> {
@@ -108,6 +114,22 @@ export class AudioManager {
             
             case 'input_audio_buffer.committed':
               console.log('[AudioManager] Input audio buffer committed');
+              break;
+            
+            case 'slide_changed':
+              console.log('[AudioManager] Slide changed:', data.slide_index, 'Total slides:', data.total_slides);
+              console.log('[AudioManager] Slide data:', data.slide);
+              if (this.onSlideChanged && data.slide) {
+                // Ensure slide has index field
+                const slideWithIndex = {
+                  ...data.slide,
+                  index: data.slide_index !== undefined ? data.slide_index : (data.slide.index || 0)
+                };
+                console.log('[AudioManager] Calling onSlideChanged with:', slideWithIndex, data.total_slides || 0);
+                this.onSlideChanged(slideWithIndex, data.total_slides || 0);
+              } else {
+                console.warn('[AudioManager] slide_changed event missing slide data or callback');
+              }
               break;
             
             default:
