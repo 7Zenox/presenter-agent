@@ -17,7 +17,7 @@ install: install-backend install-frontend
 
 install-backend:
 	@echo "📦 Installing backend dependencies..."
-	cd backend && uv pip install -e .
+	cd backend && uv sync
 
 install-frontend:
 	@echo "📦 Installing frontend dependencies..."
@@ -26,7 +26,7 @@ install-frontend:
 # Development servers
 dev-backend:
 	@echo "🚀 Starting backend server on http://localhost:8000"
-	cd backend && fastapi dev app/main.py --host 0.0.0.0 --port 8000
+	cd backend && uv run fastapi dev app/main.py --host 0.0.0.0 --port 8000
 
 dev-frontend:
 	@echo "🚀 Starting frontend server on http://localhost:5173"
@@ -38,7 +38,7 @@ dev-all:
 	@echo "   Backend: http://localhost:8000"
 	@echo "   Frontend: http://localhost:5173"
 	@trap 'kill 0' EXIT; \
-	cd backend && fastapi dev app/main.py --host 0.0.0.0 --port 8000 & \
+	cd backend && uv run fastapi dev app/main.py --host 0.0.0.0 --port 8000 & \
 	cd frontend && npm run dev & \
 	wait
 
