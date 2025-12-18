@@ -271,6 +271,3 @@ SLIDES (use get_slide(slide_number=X) tool to retrieve full content):
 
 # Global presentation manager instance
 presentation_manager = PresentationManager()
-
-
-

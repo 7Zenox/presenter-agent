@@ -45,7 +45,6 @@ function App() {
         })
       }, {
         onSlideChanged: (slide: Slide, total: number) => {
-          console.log('[App] Slide changed callback:', slide, total);
           setCurrentSlide(slide);
           setTotalSlides(total);
         }
@@ -252,7 +251,6 @@ function App() {
       }
 
       const result = await response.json();
-      console.log('Presentation uploaded:', result);
 
       if (result.slides && result.slides.length > 0) {
         setCurrentSlide(result.slides[0]);
@@ -261,7 +259,6 @@ function App() {
 
       const sendStartPresentation = () => {
         if (audioManager.current?.ws?.readyState === WebSocket.OPEN) {
-          console.log('[App] Sending start_presentation message');
           audioManager.current.ws.send(JSON.stringify({
             type: 'start_presentation'
           }));
@@ -271,7 +268,6 @@ function App() {
       };
 
       if (!sendStartPresentation()) {
-        console.log('[App] WebSocket not ready, waiting for connection...');
         let attempts = 0;
         const maxAttempts = 20;
 
