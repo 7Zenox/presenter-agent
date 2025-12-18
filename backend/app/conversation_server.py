@@ -12,7 +12,6 @@ try:
     AUDIO_AVAILABLE = True
 except ImportError:
     AUDIO_AVAILABLE = False
-    print("⚠️ Install sounddevice and numpy: uv pip install sounddevice numpy")
 
 load_dotenv()
 
@@ -78,11 +77,6 @@ class ConversationServer:
         self.session = await self.runner.run()
         self.is_running = True
         
-        print("✅ Server started")
-        print("🎤 Speak into your microphone")
-        print("🔊 Listen for responses")
-        print("Press Ctrl+C to stop\n")
-        
         # Start audio output stream (for smooth playback)
         self._start_audio_output()
         
@@ -94,9 +88,6 @@ class ConversationServer:
     
     def _audio_callback(self, indata, frames, time, status):
         """Audio input callback."""
-        if status:
-            print(f"Audio status: {status}")
-        
         # Convert to bytes
         audio_bytes = indata.astype(DTYPE).tobytes()
         
@@ -108,12 +99,10 @@ class ConversationServer:
                     self.event_loop
                 )
             except Exception as e:
-                print(f"Error sending audio: {e}")
+                pass  # Silently handle audio send errors
     
     async def _capture_audio(self):
         """Capture audio from microphone."""
-        print("🎤 Starting microphone...")
-        
         try:
             with sd.InputStream(
                 samplerate=SAMPLE_RATE,
@@ -122,19 +111,14 @@ class ConversationServer:
                 blocksize=CHUNK_SIZE,
                 callback=self._audio_callback,
             ):
-                print("🎤 Microphone ready")
                 while self.is_running:
                     await asyncio.sleep(1)
         except Exception as e:
-            print(f"❌ Audio error: {e}")
             import traceback
             traceback.print_exc()
     
     def _audio_output_callback(self, outdata, frames, time, status):
         """Callback for audio output stream - provides smooth playback."""
-        if status:
-            print(f"Audio output status: {status}")
-        
         with self.buffer_lock:
             bytes_needed = frames * CHANNELS * 2  # 2 bytes per sample (int16)
             
@@ -171,7 +155,6 @@ class ConversationServer:
     
     def _start_audio_output(self):
         """Start audio output stream for smooth playback."""
-        print("🔊 Starting audio output...")
         try:
             self.output_stream = sd.OutputStream(
                 samplerate=SAMPLE_RATE,
@@ -182,20 +165,14 @@ class ConversationServer:
                 latency='low',  # Low latency mode
             )
             self.output_stream.start()
-            print("🔊 Audio output ready")
         except Exception as e:
-            print(f"❌ Error starting audio output: {e}")
             import traceback
             traceback.print_exc()
     
     async def _receive_events(self):
         """Receive and handle events from OpenAI."""
-        print("🎧 Starting event loop...")
-        
         try:
             async with self.session:
-                print("✅ Connected to OpenAI")
-                
                 async for event in self.session:
                     if not self.is_running:
                         break
@@ -208,7 +185,6 @@ class ConversationServer:
                     if (event_type == "response.interrupted" or 
                         event_type == "audio_interrupted" or
                         (hasattr(event, "interrupted") and event.interrupted)):
-                        print("🛑 Interruption detected - stopping audio playback")
                         # Clear audio queue and buffer immediately
                         while not self.audio_queue.empty():
                             try:
@@ -248,24 +224,23 @@ class ConversationServer:
                     
                     # Handle response completion
                     elif event_type == "response.done":
-                        print("✅ Response completed")
+                        pass
                     
                     # Handle response start
                     elif event_type == "response.created":
-                        print("🎤 Assistant started speaking")
+                        pass
                     
                     # Handle transcripts
                     elif hasattr(event, "text") and event.text:
-                        print(f"\n🤖 Assistant: {event.text}")
+                        pass
                     
                     # Handle user transcripts
                     elif hasattr(event, "input_audio_transcription"):
                         transcript = getattr(event.input_audio_transcription, "transcript", None)
                         if transcript:
-                            print(f"👤 You: {transcript}")
+                            pass
         
         except Exception as e:
-            print(f"❌ Event error: {e}")
             import traceback
             traceback.print_exc()
     
@@ -286,13 +261,11 @@ class ConversationServer:
                 await self.session.close()
             except:
                 pass
-        print("✅ Server stopped")
 
 
 async def main():
     """Main function."""
     if not AUDIO_AVAILABLE:
-        print("❌ Install: uv pip install sounddevice numpy")
         return
     
     server = ConversationServer()
@@ -300,15 +273,10 @@ async def main():
     try:
         await server.start()
     except KeyboardInterrupt:
-        print("\n👋 Stopping...")
+        pass
     finally:
         await server.stop()
 
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
-
-
-

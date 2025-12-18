@@ -22,7 +22,6 @@ class PresentationManager:
         """Load a PowerPoint presentation from bytes."""
         try:
             # Clear any existing presentation data first
-            logger.info("Clearing any existing presentation data...")
             self.presentation = None
             self.slides = []
             self.current_slide_index = 0
@@ -42,23 +41,8 @@ class PresentationManager:
             
             self.current_slide_index = 0
             
-            # Log first slide to verify content
-            if self.slides:
-                first_slide = self.slides[0]
-                logger.info(f"✅ Loaded NEW presentation with {len(self.slides)} slides")
-                logger.info(f"   First slide title: '{first_slide['title']}'")
-                logger.info(f"   First slide content (first 200 chars): '{first_slide['content'][:200]}'")
-                
-                # Verify storage: Log a few slides to confirm they're stored
-                logger.info(f"   📦 Storage verification:")
-                logger.info(f"      - Total slides stored in memory: {len(self.slides)}")
-                if len(self.slides) > 4:
-                    slide_5 = self.slides[4]  # Index 4 = slide 5
-                    logger.info(f"      - Slide 5 stored: ✅ (title: '{slide_5['title'][:50]}...')")
-                    logger.info(f"      - Slide 5 content length: {len(slide_5['content'])} chars")
-                logger.info(f"   ✅ All slides stored in memory - get_slide() tool can fetch any slide on demand")
-            else:
-                logger.warning("⚠️ Loaded presentation but no slides found!")
+            if not self.slides:
+                logger.warning("Loaded presentation but no slides found")
             
             return {
                 "success": True,
@@ -197,18 +181,14 @@ class PresentationManager:
         when the presentation was loaded. All slides are kept in memory for fast access.
         """
         if not self.slides:
-            logger.error("❌ get_slide_content called but no slides in memory!")
             return {"error": "No presentation loaded"}
         
         if 0 <= slide_index < len(self.slides):
             slide = self.slides[slide_index].copy()
             slide["is_current"] = (slide_index == self.current_slide_index)
-            logger.info(f"   📦 Retrieved slide {slide_index + 1} from memory storage")
-            logger.info(f"      Title: '{slide.get('title', 'N/A')}'")
-            logger.info(f"      Content length: {len(slide.get('content', ''))} chars")
             return slide
         else:
-            logger.error(f"   ❌ Invalid slide_index {slide_index} (valid range: 0-{len(self.slides) - 1})")
+            logger.error(f"Invalid slide_index {slide_index} (valid range: 0-{len(self.slides) - 1})")
             return {"error": f"Invalid slide index. Must be between 0 and {len(self.slides) - 1}"}
     
     def get_all_slides_summary(self) -> str:
@@ -239,27 +219,9 @@ class PresentationManager:
         
         slides_json = json.dumps(slides_list, indent=2, ensure_ascii=False)
         
-        # Log summary stats
-        logger.info(f"📄 Generated slide list: {len(self.slides)} slides (numbers + titles only)")
-        logger.info(f"   Summary length: {len(slides_json)} chars (~{len(slides_json) // 4} tokens)")
-        
         # Verify all slides are included
-        logger.info(f"   🔍 Verifying all slides included:")
-        logger.info(f"      Expected slides: {len(self.slides)}")
-        logger.info(f"      Actual entries: {len(slides_list)}")
         if len(slides_list) != len(self.slides):
-            logger.error(f"   ❌❌❌ MISMATCH: Expected {len(self.slides)} slides but got {len(slides_list)} entries!")
-        
-        # Log slide numbers to verify they're sequential
-        slide_numbers = [s['slide_number'] for s in slides_list]
-        logger.info(f"   📋 Slide numbers: {slide_numbers[:10]}{'...' if len(slide_numbers) > 10 else ''}")
-        if len(slide_numbers) > 0:
-            logger.info(f"   📋 First slide: {slide_numbers[0]}, Last slide: {slide_numbers[-1]}")
-            if 5 in slide_numbers:
-                slide_5 = next(s for s in slides_list if s['slide_number'] == 5)
-                logger.info(f"   ✅ Slide 5 found: title='{slide_5.get('title', 'N/A')}'")
-            else:
-                logger.error(f"   ❌❌❌ Slide 5 NOT found! Available slides: {slide_numbers}")
+            logger.error(f"MISMATCH: Expected {len(self.slides)} slides but got {len(slides_list)} entries")
         
         return f"""Total slides: {len(self.slides)}
 
@@ -304,9 +266,7 @@ SLIDES (use get_slide(slide_number=X) tool to retrieve full content):
                 lines.append(f"NOTES:\n{notes}\n")
             lines.append("")
         
-        result = "\n".join(lines)
-        logger.info(f"📄 Full presentation content: {len(result)} chars (~{len(result) // 4} tokens)")
-        return result
+        return "\n".join(lines)
 
 
 # Global presentation manager instance

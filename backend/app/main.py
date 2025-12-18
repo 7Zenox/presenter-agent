@@ -157,11 +157,6 @@ async def handle_tool_call(vendor_ws, client_ws, item: dict):
     call_id = item.get("call_id", "")  # Use call_id, not id
     arguments_str = item.get("arguments", "{}")
     
-    logger.info(f"🔧🔧🔧 HANDLING TOOL CALL 🔧🔧🔧")
-    logger.info(f"   Function: {function_name}")
-    logger.info(f"   Call ID: {call_id}")
-    logger.info(f"   Arguments: {arguments_str}")
-    
     # Parse arguments
     try:
         arguments = json.loads(arguments_str) if isinstance(arguments_str, str) else arguments_str
@@ -193,10 +188,6 @@ async def handle_tool_call(vendor_ws, client_ws, item: dict):
                     "message": f"Now on slide {current_idx + 1}. READ THE CONTENT ABOVE OUT LOUD."
                 }
                 
-                logger.info(f"   📍 Navigated to slide {current_idx + 1}")
-                logger.info(f"   📄 Title: {result['title']}")
-                logger.info(f"   📄 Content length: {len(result['content'])} chars")
-                
                 # Notify client of slide change
                 await client_ws.send_json({
                     "type": "slide_changed",
@@ -209,47 +200,39 @@ async def handle_tool_call(vendor_ws, client_ws, item: dict):
         
         elif function_name == "get_slide_content":
             slide_index = arguments.get("slide_index")
-            logger.info(f"   📄 Getting content for slide {slide_index}")
             result = presentation_manager.get_slide_content(slide_index)
-            if "error" not in result:
-                logger.info(f"   ✅ Retrieved slide {slide_index}: '{result.get('title', 'N/A')}'")
-                logger.info(f"   📝 Content preview: '{result.get('content', '')[:200]}...'")
-            else:
-                logger.warning(f"   ⚠️ Error getting slide {slide_index}: {result.get('error')}")
+            if "error" in result:
+                logger.warning(f"Error getting slide {slide_index}: {result.get('error')}")
         
         elif function_name == "get_current_slide":
             result = presentation_manager.get_current_slide()
         
         elif function_name == "get_slide":
             slide_number = arguments.get("slide_number")
-            logger.info(f"   📄 get_slide called with slide_number={slide_number}")
             if slide_number is None:
                 result = {"error": "slide_number is required"}
-                logger.error("   ❌ get_slide called without slide_number!")
+                logger.error("get_slide called without slide_number")
             else:
                 # Convert 1-based slide number to 0-based index
                 slide_index = slide_number - 1
                 if slide_index < 0 or slide_index >= len(presentation_manager.slides):
                     result = {"error": f"Invalid slide number {slide_number}. Valid range: 1-{len(presentation_manager.slides)}"}
-                    logger.error(f"   ❌ Invalid slide_number {slide_number}")
+                    logger.error(f"Invalid slide_number {slide_number}")
                 else:
                     slide_data = presentation_manager.get_slide_content(slide_index)
                     if "error" not in slide_data:
                         # Add slide_number for consistency
                         slide_data["slide_number"] = slide_number
                         result = slide_data
-                        logger.info(f"   ✅ Retrieved full content for slide {slide_number}: '{slide_data.get('title', 'N/A')}'")
-                        logger.info(f"   📝 Content length: {len(slide_data.get('content', ''))} chars")
                     else:
                         result = slide_data
         
         elif function_name == "search_slides":
             query = arguments.get("query", "").lower().strip()
-            logger.info(f"   🔍 search_slides called with query: '{query}'")
             
             if not query:
                 result = {"error": "query is required"}
-                logger.warning("   ⚠️ search_slides called without query")
+                logger.warning("search_slides called without query")
             else:
                 # Extract keywords from query
                 import re
@@ -261,8 +244,6 @@ async def handle_tool_call(vendor_ws, client_ws, item: dict):
                 
                 if not keywords:
                     keywords = query.split()
-                
-                logger.info(f"   🔑 Search keywords: {keywords}")
                 
                 # Search slides
                 matching_slides = []
@@ -293,32 +274,27 @@ async def handle_tool_call(vendor_ws, client_ws, item: dict):
                     "slides": matching_slides[:3]  # Return top 3 matches
                 }
                 
-                if matching_slides:
-                    top = matching_slides[0]
-                    logger.info(f"   ✅ Found {len(matching_slides)} matches. Top: slide {top['slide_number']} - '{top['title']}' (score: {top['score']})")
-                else:
-                    logger.warning(f"   ⚠️ No matches found for: {keywords}")
+                if not matching_slides:
+                    logger.warning(f"No matches found for query: {query}")
         
         elif function_name == "show_slide":
             slide_number = arguments.get("slide_number")
-            logger.info(f"   🎯 show_slide called with slide_number={slide_number}")
             if slide_number is None:
                 result = {"error": "slide_number is required"}
-                logger.error("   ❌ show_slide called without slide_number!")
+                logger.error("show_slide called without slide_number")
             else:
                 # Convert 1-based slide number to 0-based index
                 slide_index = slide_number - 1
-                logger.info(f"   📍 Converting slide_number {slide_number} to index {slide_index}")
                 
                 # Validate slide index
                 if slide_index < 0 or slide_index >= len(presentation_manager.slides):
                     result = {"error": f"Invalid slide number {slide_number}. Valid range: 1-{len(presentation_manager.slides)}"}
-                    logger.error(f"   ❌ Invalid slide_number {slide_number} (index {slide_index}), total slides: {len(presentation_manager.slides)}")
+                    logger.error(f"Invalid slide_number {slide_number}")
                 else:
                     nav_result = presentation_manager.navigate_to_slide("jump", slide_index)
                     if "error" in nav_result:
                         result = nav_result
-                        logger.error(f"   ❌ Navigation error: {nav_result.get('error')}")
+                        logger.error(f"Navigation error: {nav_result.get('error')}")
                     else:
                         result = {
                             "success": True,
@@ -332,19 +308,12 @@ async def handle_tool_call(vendor_ws, client_ws, item: dict):
                         if "index" not in slide_data:
                             slide_data["index"] = slide_index
                         
-                        logger.info(f"   📤 Sending slide_changed event to frontend:")
-                        logger.info(f"      slide_index: {slide_index}")
-                        logger.info(f"      slide_number: {slide_number}")
-                        logger.info(f"      title: {slide_data.get('title', 'N/A')}")
-                        logger.info(f"      total_slides: {nav_result.get('total_slides', 0)}")
-                        
                         await client_ws.send_json({
                             "type": "slide_changed",
                             "slide_index": slide_index,
                             "total_slides": nav_result.get("total_slides", 0),
                             "slide": slide_data,
                         })
-                        logger.info(f"   ✅ slide_changed event sent successfully")
         
         else:
             result = {"error": f"Unknown function: {function_name}"}
@@ -354,7 +323,6 @@ async def handle_tool_call(vendor_ws, client_ws, item: dict):
         result = {"error": str(e)}
     
     # Send tool result back to OpenAI
-    logger.info(f"📤 Sending tool result back to OpenAI for {function_name} (call_id: {call_id})")
     tool_result_message = {
         "type": "conversation.item.create",
         "item": {
@@ -365,30 +333,6 @@ async def handle_tool_call(vendor_ws, client_ws, item: dict):
     }
     
     await vendor_ws.send(json.dumps(tool_result_message))
-    logger.info(f"✅ Tool result sent successfully for {function_name}")
-    # Log full result for specific tools to verify content is being sent
-    if function_name == "search_slides":
-        logger.info(f"✅ search_slides result sent:")
-        if isinstance(result, dict) and "slides" in result:
-            logger.info(f"   Total matches: {result.get('total_matches', 0)}")
-            for idx, slide in enumerate(result.get('slides', [])[:2]):
-                logger.info(f"   Match {idx+1}: slide {slide.get('slide_number')} - '{slide.get('title')}' (score: {slide.get('score')})")
-                logger.info(f"      Content preview: {slide.get('content', '')[:200]}...")
-    elif function_name == "get_slide":
-        logger.info(f"✅ get_slide result sent:")
-        if isinstance(result, dict) and "error" not in result:
-            logger.info(f"   Slide {result.get('slide_number', 'N/A')}: '{result.get('title', 'N/A')}'")
-            logger.info(f"   Full content length: {len(result.get('content', ''))} chars")
-            logger.info(f"   Content preview: {result.get('content', '')[:300]}...")
-        else:
-            logger.warning(f"   ⚠️ Error retrieving slide: {result.get('error', 'Unknown error')}")
-    elif function_name == "get_slide_content":
-        logger.info(f"✅ Tool result sent for {function_name}:")
-        logger.info(f"   Title: '{result.get('title', 'N/A') if isinstance(result, dict) else 'N/A'}'")
-        logger.info(f"   Content length: {len(str(result.get('content', ''))) if isinstance(result, dict) else 0} chars")
-        logger.info(f"   Full result (first 500 chars): {json.dumps(result)[:500]}...")
-    else:
-        logger.info(f"✅ Tool result sent: {json.dumps(result)[:200]}")
     
     # Request OpenAI to continue with the tool result
     continue_message = {
@@ -407,7 +351,6 @@ async def add_presentation_to_conversation(vendor_ws):
     - Use role: "user" for data context (not "system" which is for instructions)
     """
     if not presentation_manager.slides:
-        logger.warning("   ⚠️ No slides to add to conversation")
         return
     
     total_slides = len(presentation_manager.slides)
@@ -417,8 +360,6 @@ async def add_presentation_to_conversation(vendor_ws):
     if total_slides <= 5:
         # Small presentation: Add full content as conversation items
         # Use role: "user" per OpenAI docs - this is data context, not instructions
-        logger.info(f"   📚 Adding FULL content of {total_slides} slides to conversation (small presentation)")
-        
         for slide in presentation_manager.slides:
             slide_num = slide['index'] + 1
             title = slide.get('title', 'Untitled')
@@ -447,13 +388,9 @@ Content:
             await vendor_ws.send(json.dumps(slide_item))
             await asyncio.sleep(0.05)  # Small delay to avoid overwhelming the API
         
-        logger.info(f"   ✅ Added full content of {total_slides} slides to conversation")
-        
     else:
         # Large presentation: Add index only, use tools for retrieval
         # Per OpenAI docs: Use tools for on-demand data retrieval
-        logger.info(f"   📋 Adding slides INDEX to conversation ({total_slides} slides - using tools for content)")
-        
         slides_summary = presentation_manager.get_all_slides_summary()
         
         # Add index as a conversation item (role: "user" for data context)
@@ -476,7 +413,6 @@ Use get_slide(slide_number=X) tool to retrieve full content of any slide."""
         }
         
         await vendor_ws.send(json.dumps(index_item))
-        logger.info(f"   ✅ Added slides index to conversation - tools will fetch content on-demand")
 
 
 async def send_session_config(vendor_ws):
@@ -484,47 +420,13 @@ async def send_session_config(vendor_ws):
     # Get complete presentation JSON dump (FULL CONTENT, NO SUMMARIES)
     presentation_data = presentation_manager.get_all_slides_summary()
     
-    # CRITICAL: Verify presentation data is not empty
+    # Verify presentation data is not empty
     if presentation_manager.slides and len(presentation_data) < 100:
-        logger.error(f"⚠️⚠️⚠️ WARNING: Presentation data seems too short ({len(presentation_data)} chars)!")
-        logger.error(f"   This might indicate the JSON is not being generated correctly!")
-    
-    # Log what presentation content is being sent - VERY EXPLICITLY
-    logger.info("=" * 80)
-    logger.info("📊 SENDING SESSION CONFIG TO OPENAI")
-    logger.info("=" * 80)
-    logger.info(f"   Total slides: {len(presentation_manager.slides)}")
-    logger.info(f"   Presentation data length: {len(presentation_data)} characters")
-    
-    if presentation_manager.slides:
-        first_slide = presentation_manager.slides[0]
-        logger.info(f"   ✅ First slide title: '{first_slide.get('title', 'N/A')}'")
-        logger.info(f"   ✅ First slide content (first 500 chars): '{first_slide.get('content', '')[:500]}...'")
-        logger.info(f"   ✅ First slide full content length: {len(first_slide.get('content', ''))} chars")
-        # Also log a few key words to verify it's the right presentation
-        content_lower = first_slide.get('content', '').lower()
-        if 'synthio' in content_lower:
-            logger.info("   ✅ VERIFIED: Content contains 'synthio' - this is the synthio labs presentation")
-        elif 'energy' in content_lower or 'grid' in content_lower:
-            logger.warning("   ⚠️  WARNING: Content contains 'energy' or 'grid' - this might be the OLD presentation!")
-        elif 'shuttle' in content_lower or 'mobility' in content_lower:
-            logger.warning("   ⚠️  WARNING: Content contains 'shuttle' or 'mobility' - this might be the OLD presentation!")
-        
-        # Log a sample of the JSON data being sent
-        import json
-        if presentation_manager.slides:
-            sample_slide = presentation_manager.slides[0].copy()
-            sample_slide['slide_number'] = sample_slide['index'] + 1
-            logger.info(f"   📄 Sample slide JSON (first 1000 chars): {json.dumps(sample_slide, indent=2)[:1000]}...")
-    else:
-        logger.warning("   ⚠️ No slides loaded in presentation_manager!")
-        logger.warning("   ⚠️ Presentation data will be empty!")
-    
-    logger.info("=" * 80)
+        logger.error(f"Presentation data seems too short ({len(presentation_data)} chars)")
     
     # Check if presentation is loaded
     if not presentation_manager.slides:
-        logger.warning("⚠️ WARNING: No presentation loaded! Sending config without presentation data.")
+        logger.warning("No presentation loaded! Sending config without presentation data.")
         instructions = """You are a PowerPoint presentation assistant.
 
 LANGUAGE & SPEAKING STYLE:
@@ -646,66 +548,17 @@ Start with slide {current_slide} - call get_slide(slide_number={current_slide}),
     tool_tokens = len(json.dumps(TOOL_DEFINITIONS)) // 4
     total_estimated = estimated_tokens + tool_tokens
     
-    logger.info(f"📤 Sending session config to OpenAI")
-    logger.info(f"   Instructions length: {len(instructions)} chars (~{estimated_tokens} tokens)")
-    logger.info(f"   Tools length: {len(json.dumps(TOOL_DEFINITIONS))} chars (~{tool_tokens} tokens)")
-    logger.info(f"   Total estimated: ~{total_estimated} tokens")
-    logger.info(f"   OpenAI limit: 16,384 tokens for instructions + tools")
-    logger.info(f"   Presentation data included: {'YES' if presentation_manager.slides else 'NO'}")
-    
     # Check for potential truncation (OpenAI Realtime API limit: 16,384 tokens)
     if total_estimated > 16384:
-        logger.error(f"   ❌❌❌ CRITICAL: Estimated tokens ({total_estimated}) EXCEED limit (16,384)!")
-        logger.error(f"   ❌❌❌ OpenAI will TRUNCATE instructions - AI will NOT see all slides!")
-        # Calculate how many slides would fit
+        logger.error(f"CRITICAL: Estimated tokens ({total_estimated}) exceed limit (16,384)!")
         if len(presentation_manager.slides) > 0:
             slides_per_token = len(presentation_manager.slides) / total_estimated
             visible_slides = int(16384 * slides_per_token)
-            logger.error(f"   ❌❌❌ Only first ~{visible_slides} slides will be visible out of {len(presentation_manager.slides)}!")
+            logger.error(f"Only first ~{visible_slides} slides will be visible out of {len(presentation_manager.slides)}")
     elif total_estimated > 14000:
-        logger.warning(f"   ⚠️⚠️⚠️ WARNING: Estimated tokens ({total_estimated}) approaching limit!")
-        logger.warning(f"   ⚠️⚠️⚠️ Consider using compact summaries (already implemented)")
-    
-    # CRITICAL: Verify slide count in instructions
-    if presentation_manager.slides:
-        slide_count_in_instructions = instructions.count('"slide_number":')
-        logger.info(f"   🔍 Slide entries in instructions: {slide_count_in_instructions}")
-        logger.info(f"   🔍 Expected slides: {len(presentation_manager.slides)}")
-        if slide_count_in_instructions != len(presentation_manager.slides):
-            logger.error(f"   ❌❌❌ MISMATCH: Instructions contain {slide_count_in_instructions} slides but {len(presentation_manager.slides)} slides exist!")
-            logger.error(f"   ❌❌❌ This means some slides are missing from the AI's context!")
-        else:
-            logger.info(f"   ✅ All {len(presentation_manager.slides)} slides are present in instructions")
-    
-    if presentation_data and len(presentation_data) > 50000:
-        logger.warning(f"   ⚠️ Presentation data is large ({len(presentation_data)} chars)")
-        logger.warning(f"   ⚠️ Using compact summaries to fit within token limits")
-    if presentation_manager.slides:
-        logger.info(f"   Number of slides in data: {len(presentation_manager.slides)}")
-        # Verify presentation_data is actually in instructions
-        if presentation_data and presentation_data not in instructions:
-            logger.error("⚠️⚠️⚠️ CRITICAL ERROR: Presentation data NOT found in instructions!")
-            logger.error(f"   Instructions length: {len(instructions)}")
-            logger.error(f"   Presentation data length: {len(presentation_data)}")
-        else:
-            logger.info(f"   ✅ Presentation data verified in instructions")
-        # Log a snippet showing the actual JSON data
-        if presentation_data:
-            logger.info(f"   📄 Presentation data preview (first 500 chars): {presentation_data[:500]}...")
-            # Check if slide 5 is mentioned in the data
-            if '"slide_number": 5' in presentation_data or '"slide_number":5' in presentation_data:
-                logger.info(f"   ✅ Slide 5 is present in presentation_data")
-            else:
-                logger.error(f"   ❌❌❌ Slide 5 NOT found in presentation_data!")
-            # Count how many slide_number entries are in the data
-            slide_count_in_data = presentation_data.count('"slide_number":')
-            logger.info(f"   📊 Slide entries found in presentation_data: {slide_count_in_data}")
-            if slide_count_in_data != len(presentation_manager.slides):
-                logger.error(f"   ❌❌❌ MISMATCH: Expected {len(presentation_manager.slides)} slides but found {slide_count_in_data} entries in data!")
-        logger.info(f"   📄 Instructions preview (last 500 chars): {instructions[-500:]}")
+        logger.warning(f"Estimated tokens ({total_estimated}) approaching limit")
     
     await vendor_ws.send(config_json)
-    logger.info("✅ Session configuration sent to OpenAI with tools")
 
 
 async def relay_messages(client_ws: WebSocket, vendor_ws):
@@ -730,7 +583,6 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                             "audio": audio_b64
                         }
                         await vendor_ws.send(json.dumps(openai_message))
-                        logger.debug(f"Sent audio chunk to OpenAI ({len(audio_b64)} chars)")
                 
                 elif data.get("type") == "audio_commit":
                     # Client signals end of audio input
@@ -738,7 +590,6 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                         "type": "input_audio_buffer.commit"
                     }
                     await vendor_ws.send(json.dumps(commit_message))
-                    logger.debug("Committed audio buffer to OpenAI")
                 
                 elif data.get("type") == "interrupt":
                     # Cancel current response
@@ -746,15 +597,12 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                         "type": "response.cancel"
                     }
                     await vendor_ws.send(json.dumps(cancel_message))
-                    logger.info("Cancelled OpenAI response")
                 
                 elif data.get("type") == "start_presentation":
                     # Trigger AI to start presenting
-                    logger.info("🚀 Starting presentation - updating session config and requesting response")
-                    
                     # Verify presentation is loaded
                     if not presentation_manager.slides:
-                        logger.error("❌ No presentation loaded! Cannot start presentation.")
+                        logger.error("No presentation loaded! Cannot start presentation.")
                         await client_ws.send_json({
                             "type": "error",
                             "error": "No presentation loaded. Please upload a presentation first.",
@@ -762,30 +610,12 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                         })
                         continue
                     
-                    logger.info(f"   Presentation has {len(presentation_manager.slides)} slides")
-                    first_slide = presentation_manager.slides[0]
-                    logger.info(f"   First slide title: '{first_slide.get('title', 'N/A')}'")
-                    logger.info(f"   First slide content preview: '{first_slide.get('content', '')[:200]}...'")
-                    
-                    # Note: We don't clear conversation here as OpenAI Realtime API manages it
-                    # Instead, we rely on the session.update to provide fresh context
-                    logger.info("   📝 Session will be updated with new presentation context")
-                    
-                    # CRITICAL: Update session config with NEW presentation context
-                    # This ensures OpenAI has the latest presentation content in its instructions
-                    logger.info("   🔄 Updating session config with presentation content...")
+                    # Update session config with NEW presentation context
                     await send_session_config(vendor_ws)
-                    logger.info("   ✅ Session config updated with NEW presentation content")
-                    logger.info("   ⏳ Waiting for OpenAI to process session update...")
-                    # Longer delay to ensure config is fully processed by OpenAI
                     await asyncio.sleep(1.5)
-                    logger.info("   ✅ Proceeding with presentation start")
                     
                     # Add presentation data as conversation items (per OpenAI docs best practice)
-                    # This ensures all slide data is in conversation context, not just instructions
-                    logger.info("   📚 Adding presentation data as conversation items...")
                     await add_presentation_to_conversation(vendor_ws)
-                    logger.info("   ✅ Presentation data added to conversation")
                     await asyncio.sleep(0.5)
                     
                     # Navigate to first slide
@@ -801,10 +631,8 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                         "total_slides": result.get("total_slides", 0),
                         "slide": slide_data,
                     })
-                    logger.info(f"   📺 Initial slide set: index=0, title='{slide_data.get('title', 'N/A')}'")
                     
                     # Send start message - AI should use tools to get slide content
-                    # Per OpenAI docs: Use tools to retrieve data, don't embed everything
                     start_message_text = {
                         "type": "conversation.item.create",
                         "item": {
@@ -819,33 +647,26 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                         }
                     }
                     await vendor_ws.send(json.dumps(start_message_text))
-                    logger.info("   🔄 Sent start message - AI will use tools to get slide content")
                     await asyncio.sleep(0.3)
                     
                     # Request a response
-                    # Per OpenAI docs: Use tool_choice="required" only when tools are necessary
-                    # For small presentations with content in conversation, "auto" is fine
                     total_slides = len(presentation_manager.slides)
                     if total_slides <= 5:
-                        # Small presentation: Content in conversation, tools optional for navigation
                         start_message = {
                             "type": "response.create",
                             "response": {
                                 "modalities": ["text", "audio"],
-                                "tool_choice": "auto"  # Content in conversation, tools for navigation
+                                "tool_choice": "auto"
                             }
                         }
-                        logger.info("✅ Presentation start requested - content in conversation, tools optional")
                     else:
-                        # Large presentation: Must use tools to get content
                         start_message = {
                             "type": "response.create",
                             "response": {
                                 "modalities": ["text", "audio"],
-                                "tool_choice": "required"  # Must use tools to retrieve content
+                                "tool_choice": "required"
                             }
                         }
-                        logger.info("✅ Presentation start requested - AI must call tools to get content")
                     
                     await vendor_ws.send(json.dumps(start_message))
                 
@@ -853,7 +674,6 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                     # Manual slide navigation from user
                     action = data.get("action")
                     slide_index = data.get("slide_index")
-                    logger.info(f"Manual slide navigation: {action}, slide_index: {slide_index}")
                     
                     # Navigate slide
                     result = presentation_manager.navigate_to_slide(action, slide_index)
@@ -869,15 +689,13 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                 elif data.get("type") == "session.update":
                     # Forward session update directly
                     await vendor_ws.send(json.dumps(data))
-                    logger.info("Forwarded session update to OpenAI")
                 
                 else:
                     # Forward other messages as-is
                     await vendor_ws.send(json.dumps(data))
-                    logger.debug(f"Forwarded message to OpenAI: {data.get('type')}")
                     
         except WebSocketDisconnect:
-            logger.info("Client WebSocket disconnected")
+            pass
         except Exception as e:
             logger.error(f"Error in client_to_vendor: {e}")
             traceback.print_exc()
@@ -925,57 +743,14 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                         pass
                     continue
                 
-                # Log the event type for debugging
-                event_type = data.get("type")
-                if event_type:
-                    # Always log ALL events at INFO level for debugging
-                    logger.info(f"📨 Received OpenAI event: {event_type}")
-                    
-                    # Log response-related events with more detail
-                    if event_type.startswith("response."):
-                        logger.info(f"   📢 Response event: {event_type}")
-                        # Log response details for debugging
-                        if "response" in data:
-                            resp_data = data.get("response", {})
-                            if isinstance(resp_data, dict):
-                                logger.info(f"   Response keys: {list(resp_data.keys())}")
-                                # Log status if available
-                                if "status" in resp_data:
-                                    logger.info(f"   Response status: {resp_data.get('status')}")
-                                # Log output if available
-                                if "output" in resp_data:
-                                    output = resp_data.get("output", [])
-                                    logger.info(f"   Response output items: {len(output)}")
-                                    for idx, item in enumerate(output):
-                                        logger.info(f"     Item {idx}: {item.get('type', 'unknown')}")
-                    
-                    # Log full event for audio-related events
-                    if "audio" in event_type.lower():
-                        logger.info(f"   🎵 Audio event - keys: {list(data.keys())}")
-                        if "delta" in data:
-                            delta_size = len(data.get("delta", ""))
-                            logger.info(f"   Audio delta size: {delta_size} chars")
-                        elif "audio" in data:
-                            audio_size = len(str(data.get("audio", "")))
-                            logger.info(f"   Audio data size: {audio_size} chars")
-                        else:
-                            logger.info(f"   No audio data found, all keys: {list(data.keys())}")
-                    
-                    # Log full data for response events to debug
-                    if event_type.startswith("response."):
-                        event_preview = json.dumps(data)[:800]
-                        logger.info(f"   Full event data: {event_preview}")
-                
                 # Handle server.hello - send session config after receiving it
+                event_type = data.get("type")
                 if event_type == "server.hello" and not session_configured:
-                    logger.info("Received server.hello, sending session config")
                     session_configured = True
                     # Only send config if presentation is loaded, otherwise wait for upload
                     if presentation_manager.slides:
-                        logger.info("   ✅ Presentation already loaded, sending config with presentation content")
                         await send_session_config(vendor_ws)
                     else:
-                        logger.info("   ⚠️ No presentation loaded yet - sending minimal config (will update when PPT uploaded)")
                         # Send minimal config without presentation data
                         minimal_config = {
                             "type": "session.update",
@@ -998,7 +773,6 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                             }
                         }
                         await vendor_ws.send(json.dumps(minimal_config))
-                        logger.info("   Minimal session config sent (no presentation data)")
                     # Forward server.hello to client
                     await client_ws.send_json({
                         "type": "server.hello",
@@ -1011,25 +785,18 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                     # Audio chunk from OpenAI
                     delta = data.get("delta", "")
                     if delta:
-                        logger.info(f"🎵 Sending audio delta to client ({len(delta)} chars)")
                         await client_ws.send_json({
                             "type": "audio",
                             "data": delta
                         })
-                    else:
-                        logger.warning("Received response.audio.delta with empty delta")
                 
                 elif event_type == "response.output_item.added":
                     # Output item added (could be audio, text, or function_call)
                     item = data.get("item", {})
                     item_type = item.get("type")
-                    logger.info(f"🎯 Output item added: {item_type}")
                     
                     if item_type == "function_call":
                         # Function call added - we'll handle it when done
-                        function_name = item.get('name', 'unknown')
-                        logger.info(f"   🔧 Function call ADDED: {function_name}")
-                        logger.info(f"   📋 Function call details: {json.dumps(item, indent=2)[:500]}...")
                         # Track that this response has a function call
                         current_response_has_function_call = True
                     
@@ -1046,13 +813,10 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                                 audio_data = audio_obj.get("data", "")
                         
                         if audio_data:
-                            logger.info(f"🎵 Sending audio item to client ({len(audio_data)} chars)")
                             await client_ws.send_json({
                                 "type": "audio",
                                 "data": audio_data
                             })
-                        else:
-                            logger.warning(f"⚠️ Audio item has no audio data")
                     elif item_type == "text":
                         # Text item added
                         text = item.get("text", "")
@@ -1063,7 +827,7 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                                 parsed_json = json.loads(text.strip())
                                 if isinstance(parsed_json, dict) and "slide_number" in parsed_json:
                                     slide_num = parsed_json["slide_number"]
-                                    logger.warning(f"⚠️ AI output JSON instead of calling tool! Converting to show_slide({slide_num})")
+                                    logger.warning(f"AI output JSON instead of calling tool! Converting to show_slide({slide_num})")
                                     # Convert to tool call
                                     await handle_tool_call(vendor_ws, client_ws, {
                                         "name": "show_slide",
@@ -1080,8 +844,6 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                                 "text": text,
                                 "role": "assistant"
                             })
-                    else:
-                        logger.debug(f"Output item type '{item_type}' not handled")
                 
                 elif event_type == "response.text.delta":
                     # Text delta from OpenAI
@@ -1096,27 +858,18 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                 
                 elif event_type == "response.function_call_arguments.delta":
                     # Function call arguments are being streamed - no action needed, just wait for .done
-                    # This reduces log noise
                     pass
                 
                 elif event_type == "response.function_call_arguments.done":
                     # Function call arguments are complete - this is when we should execute the function call
-                    # The data has name, call_id, and arguments at the top level
                     function_name = data.get("name", "")
                     call_id = data.get("call_id", "")
                     arguments_str = data.get("arguments", "{}")
                     
                     if function_name and call_id:
                         # Check if we've already handled this call_id
-                        if call_id in handled_call_ids:
-                            logger.info(f"⏭️ Skipping already-handled function call: {function_name} (call_id: {call_id})")
-                        else:
+                        if call_id not in handled_call_ids:
                             handled_call_ids.add(call_id)
-                            logger.info(f"🔧🔧🔧 FUNCTION CALL ARGUMENTS COMPLETE 🔧🔧🔧")
-                            logger.info(f"   Function: {function_name}")
-                            logger.info(f"   Call ID: {call_id}")
-                            logger.info(f"   Arguments: {arguments_str}")
-                            
                             # Handle the function call
                             await handle_tool_call(vendor_ws, client_ws, {
                                 "name": function_name,
@@ -1124,8 +877,7 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                                 "arguments": arguments_str
                             })
                     else:
-                        logger.warning(f"⚠️ response.function_call_arguments.done missing function_name or call_id")
-                        logger.warning(f"   Data structure: {json.dumps(data, indent=2)[:500]}")
+                        logger.warning(f"response.function_call_arguments.done missing function_name or call_id")
                 
                 elif event_type == "conversation.item.input_audio_transcription.completed":
                     # User transcription
@@ -1137,7 +889,6 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                             "text": transcript,
                             "role": "user"
                         })
-                        logger.info(f"User transcript: {transcript}")
                 
                 elif event_type == "conversation.item.created":
                     # Handle conversation items (transcripts, function calls, etc.)
@@ -1152,19 +903,6 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                                 "text": transcript,
                                 "role": "user"
                             })
-                            logger.info(f"📝 User transcript: {transcript}")
-                            
-                            # Note: Navigation is handled via tools (show_slide, navigate_slide)
-                            # The AI will detect navigation requests and call the appropriate tool
-                            # No manual interception needed - let tools handle it
-                            
-                            # Log question detection for monitoring (no fallback action)
-                            question_indicators = ["what", "tell me", "explain", "how", "why", "which", "where", "when", "who", "dive", "more", "about", "investors", "features", "pricing", "team"]
-                            is_question = any(indicator in transcript_lower for indicator in question_indicators) or transcript.strip().endswith("?")
-                            
-                            if is_question and presentation_manager.slides:
-                                logger.info(f"   🔍 Question detected: '{transcript}'")
-                                logger.info(f"   ℹ️ Expecting: search_slides() → show_slide() → answer (per ReAct pattern)")
                     elif item_type == "function_call":
                         # Function call created in conversation
                         # IMPORTANT: Don't handle it here if arguments are empty - wait for response.function_call_arguments.done
@@ -1174,19 +912,12 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                         
                         # Only track it, don't execute if arguments are empty
                         if not arguments_str or arguments_str == "":
-                            logger.info(f"🔧 Function call detected in conversation.item.created: {function_name} (waiting for arguments)")
-                            logger.info(f"   📋 Call ID: {call_id}, Arguments: (empty - will wait for response.function_call_arguments.done)")
                             # Track that this response has a function call
                             current_response_has_function_call = True
                             # Don't execute yet - wait for response.function_call_arguments.done
-                        elif call_id and call_id in handled_call_ids:
-                            logger.info(f"⏭️ Skipping already-handled function call in conversation.item.created: {function_name} (call_id: {call_id})")
-                        else:
+                        elif call_id and call_id not in handled_call_ids:
                             # Arguments are already present (shouldn't happen often, but handle it)
-                            if call_id:
-                                handled_call_ids.add(call_id)
-                            logger.info(f"🔧 Function call detected in conversation.item.created with arguments: {function_name}")
-                            logger.info(f"   📋 Function call details: {json.dumps(item, indent=2)[:500]}...")
+                            handled_call_ids.add(call_id)
                             # Track that this response has a function call
                             current_response_has_function_call = True
                             await handle_tool_call(vendor_ws, client_ws, item)
@@ -1195,16 +926,12 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                     # Handle completed text output - check if AI output JSON instead of calling tools
                     text = data.get("text", "")
                     if text:
-                        logger.info(f"📝 Text output completed: {text[:200]}...")
-                        # CRITICAL: Check if AI is outputting JSON instead of calling tools
-                        # This happens when AI outputs {"slide_number":3} instead of calling show_slide()
+                        # Check if AI is outputting JSON instead of calling tools
                         try:
                             parsed_json = json.loads(text.strip())
                             if isinstance(parsed_json, dict) and "slide_number" in parsed_json:
                                 slide_num = parsed_json["slide_number"]
-                                logger.warning(f"⚠️⚠️⚠️ AI OUTPUT JSON INSTEAD OF CALLING TOOL!")
-                                logger.warning(f"   Text: {text}")
-                                logger.warning(f"   Converting to show_slide({slide_num})")
+                                logger.warning(f"AI output JSON instead of calling tool! Converting to show_slide({slide_num})")
                                 # Convert to tool call
                                 await handle_tool_call(vendor_ws, client_ws, {
                                     "name": "show_slide",
@@ -1224,16 +951,10 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                     if item_type == "function_call":
                         # Handle tool/function call
                         # Note: This might be redundant if response.function_call_arguments.done already handled it
-                        function_name = item.get('name', 'unknown')
                         call_id = item.get('call_id', '')
                         
-                        if call_id and call_id in handled_call_ids:
-                            logger.info(f"⏭️ Skipping already-handled function call in response.output_item.done: {function_name} (call_id: {call_id})")
-                        else:
-                            if call_id:
-                                handled_call_ids.add(call_id)
-                            logger.info(f"🔧 Function call detected in response.output_item.done: {function_name}")
-                            logger.info(f"   📋 Function call details: {json.dumps(item, indent=2)[:500]}...")
+                        if call_id and call_id not in handled_call_ids:
+                            handled_call_ids.add(call_id)
                             # Track that this response has a function call
                             current_response_has_function_call = True
                             await handle_tool_call(vendor_ws, client_ws, item)
@@ -1241,7 +962,6 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                         # Handle audio output items
                         audio_data = item.get("audio", "")
                         if audio_data:
-                            logger.info(f"🎵 Sending audio item to client ({len(audio_data)} chars)")
                             await client_ws.send_json({
                                 "type": "audio",
                                 "data": audio_data
@@ -1250,15 +970,12 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                         # Handle text output items
                         text = item.get("text", "")
                         if text:
-                            # CRITICAL: Check if AI is outputting JSON instead of calling tools
-                            # This happens when AI outputs {"slide_number":3} instead of calling show_slide()
+                            # Check if AI is outputting JSON instead of calling tools
                             try:
                                 parsed_json = json.loads(text.strip())
                                 if isinstance(parsed_json, dict) and "slide_number" in parsed_json:
                                     slide_num = parsed_json["slide_number"]
-                                    logger.warning(f"⚠️⚠️⚠️ AI OUTPUT JSON INSTEAD OF CALLING TOOL!")
-                                    logger.warning(f"   Text: {text}")
-                                    logger.warning(f"   Converting to show_slide({slide_num})")
+                                    logger.warning(f"AI output JSON instead of calling tool! Converting to show_slide({slide_num})")
                                     # Convert to tool call
                                     await handle_tool_call(vendor_ws, client_ws, {
                                         "name": "show_slide",
@@ -1278,112 +995,66 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                 
                 elif event_type == "response.created":
                     # Response object was created
-                    logger.info("Response created - checking status")
                     response_obj = data.get("response", {})
                     if isinstance(response_obj, dict):
                         response_id = response_obj.get("id")
-                        response_status = response_obj.get("status")
-                        logger.info(f"Response ID: {response_id}, Status: {response_status}")
-                        # Log all response fields
-                        logger.info(f"Response fields: {list(response_obj.keys())}")
+                        if response_id:
+                            current_response_id = response_id
+                            current_response_has_function_call = False  # Reset tracking
                     # Forward to client
                     await client_ws.send_json({"type": "response.created"})
                 
                 elif event_type == "response.started":
                     await client_ws.send_json({"type": "response.started"})
-                    logger.info("Response started - expecting audio/text deltas")
-                    # Log response details and track response
+                    # Track response
                     response_id = data.get("response", {}).get("id") if isinstance(data.get("response"), dict) else None
                     if response_id:
-                        logger.info(f"Response ID: {response_id}")
                         current_response_id = response_id
                         current_response_has_function_call = False  # Reset tracking
                 
                 elif event_type == "response.done":
                     await client_ws.send_json({"type": "response.done"})
-                    logger.info("✅ Response done")
-                    # Log response details to see why no audio
+                    # Check response for audio and function calls
                     response_obj = data.get("response", {})
                     if isinstance(response_obj, dict):
-                        response_status = response_obj.get("status")
                         output_items = response_obj.get("output", [])
-                        logger.info(f"   Response status: {response_status}")
-                        logger.info(f"   Response keys: {list(response_obj.keys())}")
-                        logger.info(f"   Output items count: {len(output_items) if output_items else 0}")
-                        # Check if response includes function calls
-                        has_function_call = False
                         if output_items:
-                            for idx, item in enumerate(output_items):
+                            for item in output_items:
                                 item_type = item.get("type")
-                                logger.info(f"   Output item {idx}: type={item_type}, keys={list(item.keys())}")
-                                if item_type == "function_call":
-                                    has_function_call = True
-                                    logger.info(f"   ✅ Found function_call in output item {idx}")
                                 # Check if audio is in the output items
                                 if item_type == "audio":
                                     audio_data = item.get("audio", "")
                                     if audio_data:
-                                        logger.info(f"   🎵 Found audio in output item {idx} ({len(audio_data)} chars)")
-                                        # Send it to client!
                                         await client_ws.send_json({
                                             "type": "audio",
                                             "data": audio_data
                                         })
-                                    else:
-                                        logger.warning(f"   ⚠️ Audio item {idx} has no audio data")
-                        else:
-                            logger.warning("   ⚠️ No output items in response.done - response may have failed")
-                        
-                        # Check if this response had any function calls (check both tracking methods)
-                        response_has_tool_call = has_function_call or current_response_has_function_call
-                        
-                        # Log if no function calls were made (for monitoring/debugging)
-                        if not response_has_tool_call and output_items:
-                            logger.warning("   ⚠️ Response completed WITHOUT function calls!")
-                            logger.warning("   ⚠️ tool_choice is 'required' but OpenAI didn't call a tool")
-                            logger.info("   ℹ️ Output items types: " + ", ".join([item.get("type", "unknown") for item in output_items]))
-                            # Note: With tool_choice="required", OpenAI should always call a tool.
-                            # If it didn't, we just log it rather than auto-inject (which caused loops).
-                            # Reset tracking for next response
-                            current_response_id = None
-                            current_response_has_function_call = False
-                        else:
-                            # Reset tracking for next response
-                            current_response_id = None
-                            current_response_has_function_call = False
-                    # Also log full event for debugging
-                    logger.debug(f"   Full response.done event: {json.dumps(data)[:500]}")
+                    # Reset tracking for next response
+                    current_response_id = None
+                    current_response_has_function_call = False
                 
                 elif event_type == "response.interrupted":
                     await client_ws.send_json({"type": "interrupted"})
-                    logger.info("🛑 Response interrupted by user")
                 
                 elif event_type == "input_audio_buffer.speech_started":
                     await client_ws.send_json({"type": "speech_started"})
-                    logger.info("User started speaking - this will interrupt assistant if speaking")
                 
                 elif event_type == "input_audio_buffer.speech_stopped":
                     await client_ws.send_json({"type": "speech_stopped"})
-                    logger.info("User stopped speaking - OpenAI should trigger response automatically")
                 
                 elif event_type == "input_audio_buffer.committed":
-                    logger.info("Input audio buffer committed")
                     await client_ws.send_json({"type": "input_audio_buffer.committed"})
                 
                 elif event_type == "output_audio_buffer.started":
-                    logger.info("🎵 Output audio buffer started - audio streaming beginning")
                     await client_ws.send_json({"type": "output_audio_buffer.started"})
                 
                 elif event_type == "output_audio_buffer.speech_started":
-                    logger.info("🎵 Assistant started speaking (audio output)")
                     await client_ws.send_json({"type": "output_audio_buffer.speech_started"})
                 
                 elif event_type == "output_audio_buffer.speech_stopped":
-                    logger.info("🎵 Assistant stopped speaking (audio output)")
                     await client_ws.send_json({"type": "output_audio_buffer.speech_stopped"})
                 
                 elif event_type == "output_audio_buffer.interrupted":
-                    logger.info("🛑 Output audio buffer interrupted - user spoke during assistant response")
                     await client_ws.send_json({"type": "interrupted"})
                 
                 elif event_type == "error":
@@ -1394,21 +1065,14 @@ async def relay_messages(client_ws: WebSocket, vendor_ws):
                     logger.error(f"OpenAI Error: {data}")
                 
                 elif event_type == "session.created":
-                    logger.info("OpenAI session created")
-                    # Optionally send confirmation to client
                     await client_ws.send_json({"type": "session.created"})
                 
                 else:
-                    # Forward unknown events as-is (for debugging)
-                    logger.info(f"Received unknown/unhandled event: {event_type}")
-                    # Log full data for debugging (truncated)
-                    event_preview = json.dumps(data)[:500]
-                    logger.info(f"Event data preview: {event_preview}")
-                    # Still forward to client in case frontend can handle it
+                    # Forward unknown events as-is
                     await client_ws.send_json(data)
                     
         except websockets.exceptions.ConnectionClosed as e:
-            logger.info(f"OpenAI WebSocket disconnected: {e}")
+            logger.warning(f"OpenAI WebSocket disconnected: {e}")
             # Notify client of OpenAI disconnection
             try:
                 await client_ws.send_json({
@@ -1517,17 +1181,7 @@ async def upload_presentation(file: UploadFile = File(...)):
         result = presentation_manager.load_presentation(contents)
         
         if result.get("success"):
-            logger.info(f"✅ Presentation uploaded: {file.filename}, {result['total_slides']} slides")
-            # Log first slide to verify content
-            if result["slides"] and len(result["slides"]) > 0:
-                first_slide = result["slides"][0]
-                logger.info(f"   First slide title: {first_slide.get('title', 'N/A')}")
-                logger.info(f"   First slide content preview: {first_slide.get('content', '')[:200]}...")
-            
-            # Note: Session config will be updated when frontend sends start_presentation message
-            # or when next server.hello is received. This ensures AI has slide data.
-            logger.info(f"   ℹ️ Session configs will be updated when clients trigger start_presentation")
-            
+            logger.info(f"Presentation uploaded: {file.filename}, {result['total_slides']} slides")
             return {
                 "success": True,
                 "filename": file.filename,
